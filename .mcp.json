@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "provepr": {
+      "command": "uv",
+      "args": ["run", "--quiet", "--project", "${CLAUDE_PLUGIN_ROOT}", "provepr", "mcp"]
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "name": "orvix",
+  "owner": { "name": "Orvix Labs", "url": "https://github.com/orvixx-labs" },
+  "description": "Orvix Labs plugins for AI coding agents.",
+  "plugins": [
+    {
+      "name": "provepr",
+      "source": "./",
+      "description": "Make your coding agent prove its UI change works in a real browser, and fix what fails, before it claims done."
+    }
+  ]
+}

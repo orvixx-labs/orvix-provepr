@@ -1,0 +1,14 @@
+{
+  "name": "provepr",
+  "version": "0.1.0",
+  "description": "Make your coding agent prove its UI change works: runs the change's claims in a real browser and returns evidence (step results, HTTP/console errors, screenshots, video) so the agent fixes what fails.",
+  "author": {
+    "name": "Orvix Labs",
+    "url": "https://github.com/orvixx-labs"
+  },
+  "license": "MIT",
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "homepage": "https://github.com/orvixx-labs/orvix-provepr",
+  "repository": "https://github.com/orvixx-labs/orvix-provepr"
+}

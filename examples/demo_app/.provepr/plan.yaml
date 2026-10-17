@@ -1,0 +1,26 @@
+# Claims this change makes, written before running. Each claim's steps must prove it.
+base_url: http://127.0.0.1:8765
+start: python3 server.py   # run from the project root; omit if the app is already running
+
+claims:
+  - id: page-loads
+    says: "The profile page loads with a Name field and a Save button"
+    steps:
+      - goto: /
+      - expect_visible: { role: heading, name: Profile }
+      - expect_visible: { label: Name }
+      - expect_visible: { role: button, name: Save }
+
+  - id: save-persists
+    says: "Clicking Save stores the name, and it is still there after a reload"
+    steps:
+      - goto: /
+      - fill: { label: Name, value: Ada Lovelace }
+      - click: { role: button, name: Save }
+      - expect_text: Saved
+      - reload: true
+      - expect_value: { label: Name, value: Ada Lovelace }
+
+  - id: name-length-limit
+    says: "The API rejects names longer than 100 characters"
+    # no steps: not checkable in the browser yet, reported as UNVERIFIED

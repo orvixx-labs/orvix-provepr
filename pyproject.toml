@@ -1,0 +1,39 @@
+[project]
+name = "orvix-provepr"
+version = "0.1.0"
+description = "Make AI coding agents prove their PR claims in a real browser, and fix what fails."
+readme = "README.md"
+authors = [
+    { name = "Tirth", email = "trhatwork@gmail.com" }
+]
+requires-python = ">=3.12"
+license = "MIT"
+keywords = ["ai-agents", "claude-code", "codex", "mcp", "playwright", "pull-request", "verification"]
+dependencies = [
+    "mcp>=2.3",
+    "pillow>=13.0.0",
+    "playwright>=1.64.0",
+    "pyyaml>=6.0.3",
+]
+
+[project.urls]
+Repository = "https://github.com/orvixx-labs/orvix-provepr"
+
+[project.scripts]
+provepr = "provepr.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.12.19,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "provepr"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.17.1",
+]
+
+[tool.ruff]
+line-length = 120

@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Profile</title>
+  <link rel="icon" href="data:,">
+  <style>
+    body { font: 18px system-ui, sans-serif; max-width: 480px; margin: 80px auto; }
+    input { font: inherit; padding: 6px; width: 100%; box-sizing: border-box; }
+    button { font: inherit; margin-top: 12px; padding: 6px 16px; }
+    #status { color: #16803d; margin-left: 12px; }
+  </style>
+</head>
+<body>
+  <h1>Profile</h1>
+  <label for="name">Name</label>
+  <input id="name" autocomplete="off">
+  <button id="save">Save</button><span id="status" role="status"></span>
+  <script>
+    const name = document.getElementById("name");
+    const status = document.getElementById("status");
+    fetch("/api/profile").then(r => r.json()).then(p => { name.value = p.name; });
+    document.getElementById("save").addEventListener("click", async () => {
+      await fetch("/api/profile", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({name: name.value}),
+      });
+      status.textContent = "Saved";
+    });
+  </script>
+</body>
+</html>
