@@ -8,6 +8,20 @@ authors = [
 ]
 requires-python = ">=3.12"
 license = "MIT"
+license-files = ["LICENSE"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing",
+]
 keywords = ["ai-agents", "claude-code", "codex", "mcp", "playwright", "pull-request", "verification"]
 dependencies = [
     "mcp>=2.3",
@@ -17,7 +31,10 @@ dependencies = [
 ]
 
 [project.urls]
+Homepage = "https://github.com/orvixx-labs/orvix-provepr"
 Repository = "https://github.com/orvixx-labs/orvix-provepr"
+Documentation = "https://github.com/orvixx-labs/orvix-provepr/blob/main/src/provepr/docs/guide.md"
+Issues = "https://github.com/orvixx-labs/orvix-provepr/issues"
 
 [project.scripts]
 provepr = "provepr.cli:main"

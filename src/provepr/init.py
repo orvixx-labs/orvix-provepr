@@ -9,8 +9,6 @@ from importlib.metadata import version
 from pathlib import Path
 
 BEGIN, END = "<!-- BEGIN:provepr-agent-rules -->", "<!-- END:provepr-agent-rules -->"
-# ponytail: installs from the repo's main branch; pin a PyPI version once published.
-INSTALL_SPEC = "git+https://github.com/orvixx-labs/orvix-provepr"
 
 AGENTS_BLOCK = f"""{BEGIN}
 ## provepr: prove UI changes before calling them done
@@ -122,6 +120,8 @@ def init(root: Path, ci: bool = True) -> list[str]:
 
     if ci:
         wf = read(".github/workflows/provepr.yml")
-        new = WORKFLOW.replace("PLAYWRIGHT_VERSION", version("playwright")).replace("INSTALL_SPEC", INSTALL_SPEC)
+        # CI pins the same provepr (and so the same guide and plan format) that wrote this file.
+        install = f"orvix-provepr=={version('orvix-provepr')}"
+        new = WORKFLOW.replace("PLAYWRIGHT_VERSION", version("playwright")).replace("INSTALL_SPEC", install)
         write(".github/workflows/provepr.yml", wf if wf is not None else new, wf)  # never clobber edits
     return done

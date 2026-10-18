@@ -34,7 +34,7 @@ With provepr set up, Claude Code found and fixed it by itself (see [What it caug
 ## Quick start
 
 ```
-uv tool install git+https://github.com/orvixx-labs/orvix-provepr
+uv tool install orvix-provepr      # or: pipx install orvix-provepr
 cd your-app && provepr init
 ```
 
@@ -83,7 +83,7 @@ is much harder to fool, including by its own optimism.
 regression suite as a side effect, and CI runs all of it.
 
 **How agents learn the rules.** The guide for coding agents ships inside the package
-([`src/provepr/docs/guide.md`](src/provepr/docs/guide.md)), so it always matches the installed version.
+([`src/provepr/docs/guide.md`](https://github.com/orvixx-labs/orvix-provepr/blob/main/src/provepr/docs/guide.md)), so it always matches the installed version.
 Agents reach it through `provepr docs`, the `get_guide` MCP tool, or the plugin's skill. All three point to
 the same file. `provepr check` enforces the parts a guide can't: unknown steps, unsafe ids, and claims
 with no checks are rejected before anything runs.
@@ -92,12 +92,10 @@ with no checks are rejected before anything runs.
 
 You need [uv](https://docs.astral.sh/uv/). On first run provepr downloads Chromium for Playwright by itself.
 
-> The repository is private while in early access. The install commands below need access to it.
-
 ### Any agent (AGENTS.md)
 
 ```
-uv tool install git+https://github.com/orvixx-labs/orvix-provepr
+uv tool install orvix-provepr
 provepr init
 ```
 
@@ -122,8 +120,7 @@ codex plugin add provepr
 Or add it as a plain MCP server:
 
 ```
-git clone https://github.com/orvixx-labs/orvix-provepr
-codex mcp add provepr -- uv run --quiet --project /path/to/orvix-provepr provepr mcp
+codex mcp add provepr -- uvx --from orvix-provepr provepr mcp
 ```
 
 > Codex support has not been tested end to end yet. Claude Code has (see below). Please open an issue if it doesn't work for you.
@@ -162,7 +159,7 @@ claims:
 ```
 
 The full step and locator reference is in the guide: run `provepr docs`, or read
-[`src/provepr/docs/guide.md`](src/provepr/docs/guide.md).
+[`src/provepr/docs/guide.md`](https://github.com/orvixx-labs/orvix-provepr/blob/main/src/provepr/docs/guide.md).
 
 ### MCP tools
 
@@ -263,8 +260,8 @@ cd examples/demo_app && uv run --project ../.. provepr run
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+See [CONTRIBUTING.md](https://github.com/orvixx-labs/orvix-provepr/blob/main/CONTRIBUTING.md).
 
 ## License
 
-[MIT](LICENSE) © Orvix Labs
+[MIT](https://github.com/orvixx-labs/orvix-provepr/blob/main/LICENSE) © Orvix Labs

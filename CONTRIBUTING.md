@@ -18,6 +18,15 @@ uv run ruff check . && uv run ruff format .
 claude plugin validate .                       # if you touched .claude-plugin/, .codex-plugin/ or .mcp.json
 ```
 
+## Releasing
+
+Releases go to PyPI as [`orvix-provepr`](https://pypi.org/project/orvix-provepr/) through
+`.github/workflows/publish.yml` (PyPI Trusted Publishing, so no API token is stored anywhere).
+
+1. Bump `version` in `pyproject.toml` and in `.claude-plugin/plugin.json` and `.codex-plugin/plugin.json`.
+2. Commit, then create a GitHub release with a matching tag, e.g. `v0.2.0`.
+3. The workflow runs the tests, builds, and publishes.
+
 ## Layout
 
 | Path | What |

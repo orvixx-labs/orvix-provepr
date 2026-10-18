@@ -1,0 +1,24 @@
+# Publishes to PyPI when a GitHub release is published. Uses PyPI Trusted Publishing:
+# no API token is stored; PyPI trusts this workflow in this repo.
+name: publish
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write   # required for Trusted Publishing
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Check the tag matches the package version
+        run: test "${GITHUB_REF_NAME#v}" = "$(uv version --short)"
+      - name: Install Chromium
+        run: uv run playwright install --with-deps chromium
+      - run: uv run pytest -q
+      - run: uv build
+      - run: uv publish
