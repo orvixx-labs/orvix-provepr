@@ -179,7 +179,7 @@ The full step and locator reference is in the guide: run `provepr docs`, or read
 provepr init [dir] [--no-ci]                  # set up AGENTS.md, CLAUDE.md, plan, CI workflow, .gitignore
 provepr docs                                  # print the guide for coding agents
 provepr check [--plan PATH]                   # validate the plan; exits 1 on problems
-provepr run [--plan PATH] [--base-url URL] [--only id1,id2]   # exits 1 if any claim fails
+provepr run [--plan PATH] [--base-url URL] [--only ids] [--keep-evidence]  # exits 1 on any FAIL
 provepr mcp                                   # serve the MCP tools over stdio
 ```
 
@@ -196,6 +196,11 @@ provepr mcp                                   # serve the MCP tools over stdio
 ├── videos/<claim>.webm
 └── app.log            output of the `start` command
 ```
+
+Screenshots and video are kept only for claims that FAILed, because the agent needs them to fix the
+code. Passing claims keep their report lines and their frame in `contact.png`. Only the newest 5 runs are
+kept. A fully passing run of 12 claims takes about 190 KB instead of 3.2 MB. Use `--keep-evidence` to
+keep everything, e.g. to attach a video to a PR.
 
 ## CI
 

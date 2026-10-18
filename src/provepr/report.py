@@ -1,6 +1,8 @@
 """Turn a run into report.json, a compact report.md for agents, and one contact sheet."""
 
+import contextlib
 import json
+import shutil
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
@@ -77,9 +79,31 @@ def to_markdown(report: dict) -> str:
     return "\n".join(lines)
 
 
-def write(run_dir: Path, report: dict) -> str:
+def drop_passing_evidence(run_dir: Path, report: dict) -> None:
+    """Delete screenshots and video of PASSed claims; the contact sheet already shows them.
+
+    FAIL evidence stays so the agent can inspect it while fixing.
+    """
+    for c in report["claims"]:
+        if c["status"] != "PASS":
+            continue
+        shutil.rmtree(run_dir / "frames" / c["id"], ignore_errors=True)
+        if c.get("video"):
+            (run_dir / c["video"]).unlink(missing_ok=True)
+            c["video"] = None
+        for s in c["steps"]:
+            s.pop("frame", None)
+        c["evidence"] = "deleted after passing (run with --keep-evidence to keep it)"
+    for d in ("frames", "videos"):
+        with contextlib.suppress(OSError):  # only removed when nothing failed
+            (run_dir / d).rmdir()
+
+
+def write(run_dir: Path, report: dict, keep_evidence: bool = False) -> str:
+    contact_sheet(run_dir, report)  # first: it needs the frames
+    if not keep_evidence:
+        drop_passing_evidence(run_dir, report)
     (run_dir / "report.json").write_text(json.dumps(report, indent=2))
     md = to_markdown(report)
     (run_dir / "report.md").write_text(md)
-    contact_sheet(run_dir, report)
     return md

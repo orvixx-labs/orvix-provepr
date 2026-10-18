@@ -20,8 +20,8 @@ After any change a user can see or trigger (pages, forms, buttons, flows, or an 
 3. **Run.** Use `provepr run` (or the `run_proof` MCP tool). While iterating on your own claims, add
    `--only id1,id2` (`claims` in the tool) for speed; run everything once before you finish.
 4. **Read the evidence.** For each FAIL, look at the failing step, the HTTP and console errors, and the
-   screenshots (`get_frames` MCP tool, or `.provepr/runs/<run>/frames/<claim>/`). Also look at PASS
-   screenshots: a page that passed but is visibly broken is still broken.
+   screenshots (`get_frames` MCP tool, or `.provepr/runs/<run>/frames/<claim>/`). Also look at the
+   contact sheet's PASS frames: a page that passed but is visibly broken is still broken.
 5. **Fix the code, not the plan,** and run again. Repeat until nothing FAILs.
 6. **Report** the result in your final message or PR description (format at the end of this guide).
 
@@ -144,12 +144,16 @@ or a claim whose steps contain no `expect_*` or `http` step (all actions and not
 | `provepr init` | | Sets up a repo: this guide's rules in AGENTS.md, `@AGENTS.md` in CLAUDE.md, a CI workflow, a starter plan, .gitignore |
 | `provepr docs` | `get_guide` | Prints this guide |
 | `provepr check` | | Validates the plan; exits 1 on problems |
-| `provepr run [--only ids] [--base-url URL]` | `run_proof(claims?, base_url?)` | Runs claims; exits 1 if any FAIL |
+| `provepr run [--only ids] [--base-url URL] [--keep-evidence]` | `run_proof(claims?, base_url?, keep_evidence?)` | Runs claims; exits 1 if any FAIL |
 | | `get_report(run?)` | The latest (or a named) run's report and contact sheet |
 | | `get_frames(claim_id, steps?)` | Screenshots of the failing step and the one before it |
 
 Each run writes `.provepr/runs/<run>/` containing `report.md`, `report.json`, `contact.png`,
 `frames/<claim>/NN.png`, `videos/<claim>.webm`, and `app.log` (output of `start`).
+
+To save disk space, screenshots and video are kept only for claims that FAILed. Passing claims keep their
+report lines and their frame in `contact.png`. Only the newest 5 runs are kept. Add `--keep-evidence`
+(`keep_evidence` in `run_proof`) when someone needs the full recordings, e.g. a video for a PR.
 
 ## Reporting
 

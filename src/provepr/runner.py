@@ -17,6 +17,7 @@ from provepr import plan as planfile
 
 STEP_TIMEOUT_MS = 5000
 VIEWPORT = {"width": 1280, "height": 720}
+KEEP_RUNS = 5  # older run folders are deleted when a new run starts
 
 
 def locate(page, spec: dict):
@@ -212,6 +213,13 @@ def wait_for_url(url: str, timeout_s: float = 30) -> None:
             time.sleep(0.3)
 
 
+def prune_old_runs(runs: Path, keep: int = KEEP_RUNS) -> None:
+    """Delete all but the newest `keep` run folders (names sort by time)."""
+    if runs.exists():
+        for old in sorted(p for p in runs.iterdir() if p.is_dir())[:-keep]:
+            shutil.rmtree(old, ignore_errors=True)
+
+
 def run_plan(plan_path: Path, base_url: str | None = None, only: list[str] | None = None) -> tuple[Path, dict]:
     """Run the plan's claims (all, or just the ids in `only`). Returns (run_dir, report)."""
     plan_path = plan_path.resolve()
@@ -224,7 +232,9 @@ def run_plan(plan_path: Path, base_url: str | None = None, only: list[str] | Non
             raise ValueError(f"no such claim(s): {', '.join(sorted(unknown))}")
         claims_to_run = [c for c in claims_to_run if c["id"] in only]
 
-    out = plan_path.parent / "runs" / datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    runs = plan_path.parent / "runs"
+    prune_old_runs(runs, KEEP_RUNS - 1)  # leaves room for this run
+    out = runs / datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     out.mkdir(parents=True)
 
     # The app is started from the directory that holds .provepr/, i.e. the project root.

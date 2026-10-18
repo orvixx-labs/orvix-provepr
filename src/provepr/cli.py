@@ -19,6 +19,7 @@ def main() -> None:
     run.add_argument("--plan", type=Path, default=Path(".provepr/plan.yaml"))
     run.add_argument("--base-url", help="overrides base_url in the plan (or set PROVEPR_BASE_URL)")
     run.add_argument("--only", help="comma-separated claim ids to run (default: all)")
+    run.add_argument("--keep-evidence", action="store_true", help="keep screenshots and video of passing claims too")
 
     check = sub.add_parser("check", help="validate the plan without running it")
     check.add_argument("--plan", type=Path, default=Path(".provepr/plan.yaml"))
@@ -53,7 +54,7 @@ def main() -> None:
                 run_dir, rep = runner.run_plan(args.plan, args.base_url, only)
             except (OSError, ValueError, TimeoutError) as e:
                 sys.exit(f"provepr: {e}")
-            print(report.write(run_dir, rep))
+            print(report.write(run_dir, rep, args.keep_evidence))
             print(f"evidence: {run_dir}")
             sys.exit(1 if rep["counts"]["FAIL"] else 0)
 

@@ -77,7 +77,10 @@ async def get_guide() -> str:
 
 @mcp.tool()
 async def run_proof(
-    plan_path: str = DEFAULT_PLAN, base_url: str | None = None, claims: list[str] | None = None
+    plan_path: str = DEFAULT_PLAN,
+    base_url: str | None = None,
+    claims: list[str] | None = None,
+    keep_evidence: bool = False,
 ) -> list:
     """Run the plan's claims in a headless browser and return the report plus a contact sheet.
 
@@ -85,11 +88,12 @@ async def run_proof(
     plan_path: path to the plan YAML (relative to the project root, default .provepr/plan.yaml).
     base_url: overrides the plan's base_url, e.g. http://localhost:3000.
     claims: only run these claim ids (default: all). Run everything once before finishing.
+    keep_evidence: keep screenshots and video of passing claims too (by default only failures keep them).
     """
     with anticipated():
         # Playwright's sync API cannot run on the event loop thread.
         run_dir, rep = await asyncio.to_thread(runner.run_plan, Path(plan_path), base_url, claims)
-    md = report.write(run_dir, rep)
+    md = report.write(run_dir, rep, keep_evidence)
     return [md, png(run_dir / "contact.png", width=1280)]
 
 
@@ -122,6 +126,8 @@ async def get_frames(
     claim = next((c for c in rep["claims"] if c["id"] == claim_id), None)
     if claim is None:
         raise ToolError(f"no claim '{claim_id}'; claims: {[c['id'] for c in rep['claims']]}")
+    if claim.get("evidence"):
+        return [f"claim '{claim_id}' passed; its screenshots were {claim['evidence']}. See the contact sheet."]
     recs = [s for s in claim["steps"] if s.get("frame")]
     if steps:
         recs = [s for s in recs if s["n"] in steps]

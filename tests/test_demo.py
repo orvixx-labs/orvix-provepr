@@ -68,3 +68,21 @@ def test_mcp_errors_reach_the_agent(tmp_path):
     plan.write_text("claims:\n  - id: x\n    says: y\n    steps: [{ teleport: / }]\n")
     with pytest.raises(ToolError, match="unknown step 'teleport'"):
         asyncio.run(server.run_proof(plan_path=str(plan)))
+
+
+def test_evidence_kept_only_for_failures_and_recent_runs(tmp_path):
+    plan = copy_demo(tmp_path, fixed=False)
+    runs = plan.parent / "runs"
+    for i in range(6):  # five pretend older runs
+        (runs / f"20000101-00000{i}-000000").mkdir(parents=True)
+    run_dir, rep = runner.run_plan(plan)
+    report.write(run_dir, rep)
+
+    assert len(list(runs.iterdir())) == runner.KEEP_RUNS and run_dir.exists()
+    assert not (run_dir / "frames" / "page-loads").exists()  # passed: deleted
+    assert not (run_dir / "videos" / "page-loads.webm").exists()
+    assert (run_dir / "frames" / "save-persists").exists()  # failed: kept
+    assert (run_dir / "videos" / "save-persists.webm").exists()
+    assert (run_dir / "contact.png").exists()
+    msg = asyncio.run(server.get_frames("page-loads", plan_path=rep["plan"]))
+    assert "deleted after passing" in msg[0]
