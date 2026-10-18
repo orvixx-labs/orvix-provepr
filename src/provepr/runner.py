@@ -10,24 +10,13 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
-import yaml
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import expect, sync_playwright
 
+from provepr import plan as planfile
+
 STEP_TIMEOUT_MS = 5000
 VIEWPORT = {"width": 1280, "height": 720}
-LOCATOR_KEYS = ("role", "label", "text", "placeholder", "testid", "css")
-
-
-def load_plan(path: Path) -> dict:
-    plan = yaml.safe_load(path.read_text()) or {}
-    claims = plan.get("claims")
-    if not isinstance(claims, list) or not claims:
-        raise ValueError(f"{path}: 'claims' must be a non-empty list")
-    for c in claims:
-        if not isinstance(c, dict) or not c.get("id"):
-            raise ValueError(f"{path}: every claim needs an 'id'")
-    return plan
 
 
 def locate(page, spec: dict):
@@ -43,18 +32,43 @@ def locate(page, spec: dict):
         return page.get_by_test_id(spec["testid"])
     if "css" in spec:
         return page.locator(spec["css"])
-    raise ValueError(f"no locator in {spec}; use one of {LOCATOR_KEYS}")
+    raise ValueError(f"no locator in {spec}; use one of {planfile.LOCATOR_KEYS}")
 
 
-def do_step(page, base_url: str, step: dict) -> str:
-    """Execute one step. Returns the action name; raises on failure."""
-    if not isinstance(step, dict) or len(step) != 1:
-        raise ValueError(f"step must be a single-key mapping, got {step!r}")
+def url(base_url: str, path) -> str:
+    return base_url.rstrip("/") + "/" + str(path).lstrip("/")
+
+
+def http_step(page, base_url: str, arg: dict) -> str:
+    """Call the app's API with the page's cookies. Returns a one-line summary; raises if expectations fail."""
+    method = str(arg.get("method", "GET")).upper()
+    resp = page.request.fetch(
+        url(base_url, arg["path"]),
+        method=method,
+        data=arg.get("json"),
+        headers=arg.get("headers"),
+        fail_on_status_code=False,
+        timeout=STEP_TIMEOUT_MS,
+    )
+    body = resp.text()
+    summary = f"{method} {arg['path']} -> HTTP {resp.status}: {body[:200]}"
+    want = arg.get("expect_status")
+    if (resp.status != want) if want else resp.status >= 400:
+        raise AssertionError(f"expected HTTP {want or '2xx/3xx'}; got {summary}")
+    if "expect_body" in arg and str(arg["expect_body"]) not in body:
+        raise AssertionError(f"response body does not contain {str(arg['expect_body'])!r}; got {summary}")
+    return summary
+
+
+def do_step(page, base_url: str, step: dict) -> str | None:
+    """Execute one (already validated) step. Returns an optional note; raises on failure."""
     ((action, arg),) = step.items()
     t = STEP_TIMEOUT_MS
     match action:
+        case "http":
+            return http_step(page, base_url, arg)
         case "goto":
-            page.goto(base_url.rstrip("/") + "/" + str(arg).lstrip("/"))
+            page.goto(url(base_url, arg))
         case "reload":
             page.reload()
         case "wait":
@@ -79,7 +93,7 @@ def do_step(page, base_url: str, step: dict) -> str:
             page.wait_for_url(f"**{arg}**", timeout=t)
         case _:
             raise ValueError(f"unknown step '{action}'")
-    return action
+    return None
 
 
 def short_error(e: Exception) -> str:
@@ -102,7 +116,7 @@ def run_claim(browser, base_url: str, claim: dict, out: Path) -> dict:
         "video": None,
     }
     if not steps:
-        result.update(status="UNVERIFIED", reasons=["no runnable steps (not checkable in a browser yet)"])
+        result.update(status="UNVERIFIED", reasons=["no steps, so nothing was checked"])
         return result
 
     frames = out / "frames" / cid
@@ -134,14 +148,16 @@ def run_claim(browser, base_url: str, claim: dict, out: Path) -> dict:
         rec = {"n": i, "step": step, "ok": True}
         start = time.monotonic()
         try:
-            do_step(page, base_url, step)
+            if note := do_step(page, base_url, step):
+                rec["note"] = note
         except (PlaywrightError, AssertionError, ValueError, KeyError, TypeError) as e:
             rec.update(ok=False, error=short_error(e))
         rec["ms"] = round((time.monotonic() - start) * 1000)
         frame = frames / f"{i:02d}.png"
         try:
-            page.screenshot(path=str(frame))
-            rec["frame"] = str(frame.relative_to(out))
+            if "http" not in step:  # an API call changes nothing on screen
+                page.screenshot(path=str(frame))
+                rec["frame"] = str(frame.relative_to(out))
         except PlaywrightError:
             pass
         result["steps"].append(rec)
@@ -196,13 +212,17 @@ def wait_for_url(url: str, timeout_s: float = 30) -> None:
             time.sleep(0.3)
 
 
-def run_plan(plan_path: Path, base_url: str | None = None) -> tuple[Path, dict]:
-    """Run every claim in the plan. Returns (run_dir, report)."""
+def run_plan(plan_path: Path, base_url: str | None = None, only: list[str] | None = None) -> tuple[Path, dict]:
+    """Run the plan's claims (all, or just the ids in `only`). Returns (run_dir, report)."""
     plan_path = plan_path.resolve()
-    plan = load_plan(plan_path)
-    base_url = base_url or os.environ.get("PROVEPR_BASE_URL") or plan.get("base_url")
-    if not base_url:
-        raise ValueError("no base_url: set it in the plan, pass --base-url, or set PROVEPR_BASE_URL")
+    plan = planfile.load(plan_path, base_url)
+    base_url = base_url or os.environ.get("PROVEPR_BASE_URL") or plan["base_url"]
+    claims_to_run = plan["claims"]
+    if only:
+        unknown = set(only) - {c["id"] for c in claims_to_run}
+        if unknown:
+            raise ValueError(f"no such claim(s): {', '.join(sorted(unknown))}")
+        claims_to_run = [c for c in claims_to_run if c["id"] in only]
 
     out = plan_path.parent / "runs" / datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     out.mkdir(parents=True)
@@ -227,7 +247,7 @@ def run_plan(plan_path: Path, base_url: str | None = None) -> tuple[Path, dict]:
             raise TimeoutError(f"{e}\n--- app.log (tail) ---\n{tail}" if tail else str(e)) from None
         with sync_playwright() as pw:
             browser = launch(pw)
-            claims = [run_claim(browser, base_url, c, out) for c in plan["claims"]]
+            claims = [run_claim(browser, base_url, c, out) for c in claims_to_run]
             browser.close()
     finally:
         if server and server.poll() is None:

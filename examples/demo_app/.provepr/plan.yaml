@@ -21,6 +21,11 @@ claims:
       - reload: true
       - expect_value: { label: Name, value: Ada Lovelace }
 
+  - id: profile-api
+    says: "GET /api/profile returns the profile as JSON"
+    steps:
+      - http: { method: GET, path: /api/profile, expect_status: 200, expect_body: '"name"' }
+
   - id: name-length-limit
     says: "The API rejects names longer than 100 characters"
-    # no steps: not checkable in the browser yet, reported as UNVERIFIED
+    # no steps yet: reported as UNVERIFIED

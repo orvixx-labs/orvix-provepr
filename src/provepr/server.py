@@ -7,12 +7,15 @@ model decides whether each claim really holds.
 import asyncio
 import io
 import json
+from contextlib import contextmanager
 from pathlib import Path
 
 from mcp.server.mcpserver import Image, MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from PIL import Image as PILImage
 
 from provepr import report, runner
+from provepr.cli import guide
 
 DEFAULT_PLAN = ".provepr/plan.yaml"
 FRAME_WIDTH = 800  # keeps each frame to a few hundred image tokens
@@ -20,10 +23,20 @@ FRAME_WIDTH = 800  # keeps each frame to a few hundred image tokens
 mcp = MCPServer(
     "provepr",
     instructions=(
-        "Checks a code change's claims in a real browser. Write the claims and steps to .provepr/plan.yaml "
-        "BEFORE running, then call run_proof, read the report, fix the code (never weaken the plan), and rerun."
+        "Checks a code change's claims in a real browser. Call get_guide first for the plan format and rules. "
+        "Add claims to .provepr/plan.yaml BEFORE running, then call run_proof, read the report, fix the code "
+        "(never weaken the plan), and rerun."
     ),
 )
+
+
+@contextmanager
+def anticipated():
+    """Show the agent the real message (bad plan, unknown claim, app didn't start), not a generic crash."""
+    try:
+        yield
+    except (ValueError, OSError, TimeoutError) as e:
+        raise ToolError(str(e)) from e
 
 
 def runs_dir(plan_path: str) -> Path:
@@ -54,14 +67,28 @@ def png(path: Path, width: int = FRAME_WIDTH) -> Image:
 
 
 @mcp.tool()
-async def run_proof(plan_path: str = DEFAULT_PLAN, base_url: str | None = None) -> list:
-    """Run every claim in the plan in a headless browser and return the report plus a contact sheet.
+async def get_guide() -> str:
+    """The provepr guide for coding agents: when to use it, the plan format, every step type, and the rules.
 
+    Read it before writing or editing .provepr/plan.yaml. It matches the installed version.
+    """
+    return guide()
+
+
+@mcp.tool()
+async def run_proof(
+    plan_path: str = DEFAULT_PLAN, base_url: str | None = None, claims: list[str] | None = None
+) -> list:
+    """Run the plan's claims in a headless browser and return the report plus a contact sheet.
+
+    The plan is validated first; any problems are returned as an error listing each one.
     plan_path: path to the plan YAML (relative to the project root, default .provepr/plan.yaml).
     base_url: overrides the plan's base_url, e.g. http://localhost:3000.
+    claims: only run these claim ids (default: all). Run everything once before finishing.
     """
-    # Playwright's sync API cannot run on the event loop thread.
-    run_dir, rep = await asyncio.to_thread(runner.run_plan, Path(plan_path), base_url)
+    with anticipated():
+        # Playwright's sync API cannot run on the event loop thread.
+        run_dir, rep = await asyncio.to_thread(runner.run_plan, Path(plan_path), base_url, claims)
     md = report.write(run_dir, rep)
     return [md, png(run_dir / "contact.png", width=1280)]
 
@@ -72,7 +99,8 @@ async def get_report(plan_path: str = DEFAULT_PLAN, run: str | None = None, incl
 
     include_json: also return the full report.json (every step, error and timing).
     """
-    run_dir = find_run(plan_path, run)
+    with anticipated():
+        run_dir = find_run(plan_path, run)
     out = [(run_dir / "report.md").read_text(), png(run_dir / "contact.png", width=1280)]
     if include_json:
         out.insert(1, (run_dir / "report.json").read_text())
@@ -88,11 +116,12 @@ async def get_frames(
     steps: step numbers to fetch. Default: the failing step and the one before it,
     or the last step if the claim passed.
     """
-    run_dir = find_run(plan_path, run)
+    with anticipated():
+        run_dir = find_run(plan_path, run)
     rep = json.loads((run_dir / "report.json").read_text())
     claim = next((c for c in rep["claims"] if c["id"] == claim_id), None)
     if claim is None:
-        raise ValueError(f"no claim '{claim_id}'; claims: {[c['id'] for c in rep['claims']]}")
+        raise ToolError(f"no claim '{claim_id}'; claims: {[c['id'] for c in rep['claims']]}")
     recs = [s for s in claim["steps"] if s.get("frame")]
     if steps:
         recs = [s for s in recs if s["n"] in steps]

@@ -37,7 +37,8 @@ def contact_sheet(run_dir: Path, report: dict) -> Path:
                 im.thumbnail(THUMB)
                 sheet.paste(im, (x, y + caption_h))
         else:
-            draw.text((x + 8, y + caption_h + 8), "no frames (not run)", fill="gray", font=font)
+            why = "API-only claim" if c["steps"] else "not run"
+            draw.text((x + 8, y + caption_h + 8), f"no screenshots ({why})", fill="gray", font=font)
     path = run_dir / "contact.png"
     sheet.save(path, optimize=True)
     return path
