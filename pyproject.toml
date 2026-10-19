@@ -1,6 +1,6 @@
 [project]
 name = "orvix-provepr"
-version = "0.1.0"
+version = "0.2.0"
 description = "Make AI coding agents prove their PR claims in a real browser, and fix what fails."
 readme = "README.md"
 authors = [

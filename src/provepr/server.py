@@ -81,6 +81,8 @@ async def run_proof(
     base_url: str | None = None,
     claims: list[str] | None = None,
     keep_evidence: bool = False,
+    compare: bool = False,
+    save_baseline: bool = False,
 ) -> list:
     """Run the plan's claims in a headless browser and return the report plus a contact sheet.
 
@@ -89,11 +91,13 @@ async def run_proof(
     base_url: overrides the plan's base_url, e.g. http://localhost:3000.
     claims: only run these claim ids (default: all). Run everything once before finishing.
     keep_evidence: keep screenshots and video of passing claims too (by default only failures keep them).
+    compare: report screens that look different from the saved baseline (see save_baseline).
+    save_baseline: save this run's screens as the baseline. Do this on the base branch, before your change.
     """
     with anticipated():
         # Playwright's sync API cannot run on the event loop thread.
         run_dir, rep = await asyncio.to_thread(runner.run_plan, Path(plan_path), base_url, claims)
-    md = report.write(run_dir, rep, keep_evidence)
+    md = report.write(run_dir, rep, keep_evidence, compare, save_baseline)
     return [md, png(run_dir / "contact.png", width=1280)]
 
 
@@ -115,10 +119,11 @@ async def get_report(plan_path: str = DEFAULT_PLAN, run: str | None = None, incl
 async def get_frames(
     claim_id: str, steps: list[int] | None = None, plan_path: str = DEFAULT_PLAN, run: str | None = None
 ) -> list:
-    """Return screenshots for one claim. One frame is taken after every step.
+    """Return screenshots for one claim. One frame is taken after every step (a terminal view for cmd steps).
 
-    steps: step numbers to fetch. Default: the failing step and the one before it,
-    or the last step if the claim passed.
+    steps: step numbers to fetch. Default: the failing step and the one before it; else the steps that
+    look different from the baseline; else the last step. A step that looks different also returns its
+    diff image (changed pixels in red).
     """
     with anticipated():
         run_dir = find_run(plan_path, run)
@@ -133,11 +138,17 @@ async def get_frames(
         recs = [s for s in recs if s["n"] in steps]
     else:
         bad = next((i for i, s in enumerate(recs) if not s["ok"]), None)
-        recs = recs[max(bad - 1, 0) : bad + 1] if bad is not None else recs[-1:]
+        changed = [s for s in recs if s.get("visual_change")]
+        recs = recs[max(bad - 1, 0) : bad + 1] if bad is not None else changed or recs[-1:]
     out: list = []
     for s in recs:
         out += [
             f"step {s['n']} `{report.step_label(s['step'])}`: {'ok' if s['ok'] else 'FAILED ' + s['error']}",
             png(run_dir / s["frame"]),
         ]
+        if change := s.get("visual_change"):
+            out += [
+                f"step {s['n']} diff from the baseline: {change['percent']}% changed",
+                png(run_dir / change["diff"]),
+            ]
     return out or [f"claim '{claim_id}' has no frames"]

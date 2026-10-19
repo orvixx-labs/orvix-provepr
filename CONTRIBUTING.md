@@ -13,7 +13,8 @@ uv run playwright install chromium
 ## Before opening a PR
 
 ```
-uv run pytest                                  # demo app (bug caught, fix passes), http steps, check, init
+uv run pytest                                  # demo app (bug caught, fix passes), http/mock/cmd steps,
+                                               # visual baseline, check (incl. --base), init
 uv run ruff check . && uv run ruff format .
 claude plugin validate .                       # if you touched .claude-plugin/, .codex-plugin/ or .mcp.json
 ```
@@ -31,9 +32,9 @@ Releases go to PyPI as [`orvix-provepr`](https://pypi.org/project/orvix-provepr/
 
 | Path | What |
 |---|---|
-| `src/provepr/plan.py` | loads and validates the plan (`provepr check`, and before every run) |
-| `src/provepr/runner.py` | starts the app, runs claims in Playwright (browser and `http` steps), applies the result rules |
-| `src/provepr/report.py` | `report.json`, `report.md`, contact sheet |
+| `src/provepr/plan.py` | loads and validates the plan (`provepr check`, and before every run); `check --base` comparison |
+| `src/provepr/runner.py` | starts the app, runs claims (browser, `http`, `mock` and `cmd` steps), applies the result rules |
+| `src/provepr/report.py` | `report.json`, `report.md`, contact sheet, visual baseline save and compare |
 | `src/provepr/server.py` | MCP tools (`get_guide`, `run_proof`, `get_report`, `get_frames`) |
 | `src/provepr/cli.py` | `provepr init`, `docs`, `check`, `run`, `mcp` |
 | `src/provepr/init.py` | the AGENTS.md block, CLAUDE.md import, CI workflow and starter plan templates |
@@ -47,5 +48,6 @@ Releases go to PyPI as [`orvix-provepr`](https://pypi.org/project/orvix-provepr/
 - provepr does not call an LLM. Judgement belongs to the user's agent; provepr reports facts.
 - New result rules must be deterministic and covered by a test against the demo app.
 - Keep `report.md` short: the agent pays for every token of it.
-- If you add a step type, add it to `STEPS` in `plan.py`, implement it in `runner.do_step`, and document it in
+- If you add a step type, add it to `STEPS` (and `KEYED` if it takes options) in `plan.py`, implement it in
+  `runner.do_step`, and document it in
   `src/provepr/docs/guide.md`. Do not copy guide content into the skill, README or AGENTS block: link to it.

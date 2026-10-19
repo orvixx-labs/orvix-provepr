@@ -86,3 +86,93 @@ def test_evidence_kept_only_for_failures_and_recent_runs(tmp_path):
     assert (run_dir / "contact.png").exists()
     msg = asyncio.run(server.get_frames("page-loads", plan_path=rep["plan"]))
     assert "deleted after passing" in msg[0]
+
+
+def add_claims(plan: Path, yaml_text: str) -> Path:
+    plan.write_text(plan.read_text() + yaml_text)
+    return plan
+
+
+def test_mock_reaches_error_states_without_failing_on_the_fake(tmp_path):
+    plan = add_claims(
+        copy_demo(tmp_path, fixed=True),
+        """
+  - id: save-error-shown
+    says: "When saving fails, the page does not say Saved"
+    steps:
+      - goto: /
+      - mock: { path: /api/profile, method: POST, status: 500, json: { error: down } }
+      - fill: { label: Name, value: Ada }
+      - click: { role: button, name: Save }
+      - expect_no_text: Saved
+  - id: slow-save
+    says: "A slow save still finishes"
+    steps:
+      - goto: /
+      - mock: { path: /api/profile, method: POST, delay: 1500 }
+      - click: { role: button, name: Save }
+      - expect_no_text: Saved
+      - expect_text: Saved
+""",
+    )
+    _, rep = runner.run_plan(plan, only=["save-error-shown", "slow-save"])
+    err, slow = rep["claims"]
+    # The demo UI says "Saved" even when the save fails: the step catches it, the faked 500 does not.
+    assert err["status"] == "FAIL" and [s["ok"] for s in err["steps"]] == [True] * 4 + [False]
+    assert not any("HTTP 500" in r for r in err["reasons"]) and err["network_errors"] == []
+    assert "mock POST /api/profile: answer" in err["steps"][1]["note"]
+    assert slow["status"] == "PASS"  # "Saved" was absent while held, then appeared
+
+
+def test_cmd_steps_check_cli_output_without_a_browser(tmp_path):
+    (tmp_path / ".provepr").mkdir()
+    plan = tmp_path / ".provepr" / "plan.yaml"
+    plan.write_text(
+        """
+claims:
+  - id: greets
+    says: "The CLI greets by name"
+    steps:
+      - cmd: { run: "read n; echo hello $n", stdin: Ada, expect_output: hello Ada }
+  - id: bad-flag
+    says: "An unknown flag exits with code 2"
+    steps:
+      - cmd: { run: "echo 'usage: tool' >&2; exit 1", expect_exit: 2 }
+  - id: hangs
+    says: "Finishes quickly"
+    steps:
+      - cmd: { run: "sleep 10", timeout: 1 }
+"""
+    )
+    run_dir, rep = runner.run_plan(plan)
+    report.write(run_dir, rep)
+    greets, bad, hangs = rep["claims"]
+    assert greets["status"] == "PASS" and "[exit 0]" in greets["steps"][0]["output"]
+    assert bad["status"] == "FAIL" and "expected exit 2, got 1; last output: usage: tool" in bad["steps"][0]["error"]
+    assert hangs["status"] == "FAIL" and "timed out after 1s" in hangs["steps"][0]["error"]
+    assert hangs["steps"][0]["ms"] < 5000
+    assert (run_dir / "frames" / "bad-flag" / "01.png").exists()  # the terminal view, kept because it failed
+    assert not (run_dir / "videos").exists()  # no browser was started
+
+
+def test_screens_compared_with_baseline(tmp_path):
+    plan = copy_demo(tmp_path, fixed=True)
+    run_dir, rep = runner.run_plan(plan, only=["page-loads"])
+    md = report.write(run_dir, rep, compare=True, save=True)
+    assert "No baseline" in md and (plan.parent / "baseline" / "page-loads" / "04.png").exists()
+
+    run_dir, rep = runner.run_plan(plan, only=["page-loads"])
+    report.write(run_dir, rep, compare=True)
+    assert rep["baseline"]["run"] and not any(s.get("visual_change") for s in rep["claims"][0]["steps"])
+
+    page = plan.parent.parent / "index.html"
+    page.write_text(page.read_text().replace("<h1>Profile</h1>", "<h1>Profile settings</h1>"))
+    run_dir, rep = runner.run_plan(plan, only=["page-loads"])
+    md = report.write(run_dir, rep, compare=True)
+    claim = rep["claims"][0]
+    assert claim["status"] == "PASS"  # a visual change is reported, not judged
+    change = claim["steps"][-1]["visual_change"]
+    assert change["percent"] > 0 and (run_dir / change["diff"]).exists()
+    assert "looks different from the baseline at step 1, 2, 3, 4: up to" in md
+    frames = asyncio.run(server.get_frames("page-loads", plan_path=rep["plan"]))
+    assert any(isinstance(x, str) and "diff from the baseline" in x for x in frames)

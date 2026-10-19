@@ -4,8 +4,8 @@
 
 Before an agent (Claude Code, Codex, Cursor, or anything that reads `AGENTS.md`) calls a change done or
 opens a PR, it writes down what the change claims and how to check it. provepr runs those checks in a real
-browser and against the app's HTTP API, and hands back facts: which step failed, HTTP 5xx responses, page
-and console errors, a screenshot after every step, and a video. The agent fixes what failed and runs the checks again. By the time a human opens
+browser, against the app's HTTP API and as shell commands, and hands back facts: which step failed, HTTP 5xx
+responses, page and console errors, command output, a screenshot after every step, and a video. The agent fixes what failed and runs the checks again. By the time a human opens
 the PR, each claim is marked PASS, FAIL or UNVERIFIED.
 
 provepr never calls an LLM. The agent's own model writes the plan and reads the evidence. provepr only runs
@@ -45,8 +45,8 @@ cd your-app && provepr init
 | `AGENTS.md` | A short managed block telling any agent to read `provepr docs` and follow the loop before calling a change done |
 | `CLAUDE.md` | `@AGENTS.md`, so Claude Code reads the same rules |
 | `.provepr/plan.yaml` | A starter plan. Set `base_url` and `start` to fit your app |
-| `.github/workflows/provepr.yml` | A CI job that runs `provepr check`, then `provepr run`, on every PR and uploads the evidence |
-| `.gitignore` | `.provepr/runs/` |
+| `.github/workflows/provepr.yml` | A CI job that runs `provepr check --base <PR base>`, then `provepr run`, on every PR and uploads the evidence |
+| `.gitignore` | `.provepr/runs/` and `.provepr/baseline/` |
 
 Running it again changes nothing. Existing files are kept, and only the marked AGENTS.md block is refreshed.
 After that, just ask your agent for changes as usual.
@@ -63,7 +63,8 @@ After that, just ask your agent for changes as usual.
    ├─ starts the app (optional `start:` command) and waits for it
    ├─ runs each claim in headless Chromium: video, a screenshot after every step,
    │  console errors, page errors, every HTTP 4xx/5xx and failed request,
-   │  plus `http` steps that call the app's API directly
+   │  plus `http` steps that call the app's API directly, `mock` steps that fake
+   │  failing or slow requests, and `cmd` steps that run shell commands
    ├─ marks each claim PASS / FAIL / UNVERIFIED using fixed rules, no AI
    └─ writes the evidence bundle to .provepr/runs/<run>/
    ▼
@@ -72,15 +73,18 @@ After that, just ask your agent for changes as usual.
 ```
 
 **What counts as a failure.** A claim FAILs if a step fails, the page throws an uncaught error, a request
-returns HTTP 5xx, or a request fails at the network level. Console errors and HTTP 4xx responses are listed
-for the agent to judge but do not fail the claim. A claim with no steps is UNVERIFIED, never PASS.
+returns HTTP 5xx, or a request fails at the network level (requests a `mock` step faked on purpose are
+left out). Console errors, HTTP 4xx responses and visual changes are listed for the agent to judge but do
+not fail the claim. A claim with no steps is UNVERIFIED, never PASS.
 
 **Why the plan comes first.** The agent decides what "working" looks like before it sees any evidence,
 and the guide forbids weakening the plan to make it pass. An agent that grades its own work this way
 is much harder to fool, including by its own optimism.
 
 **Why the plan accumulates.** Each change adds claims and keeps the old ones, so `plan.yaml` grows into a
-regression suite as a side effect, and CI runs all of it.
+regression suite as a side effect, and CI runs all of it. `provepr check --base main` enforces it without
+AI: a PR that removes a claim, or removes or changes one of its checks, fails unless the plan gives a reason
+under `waivers:`, which then shows up in the PR diff.
 
 **How agents learn the rules.** The guide for coding agents ships inside the package
 ([`src/provepr/docs/guide.md`](https://github.com/orvixx-labs/orvix-provepr/blob/main/src/provepr/docs/guide.md)), so it always matches the installed version.
@@ -156,6 +160,19 @@ claims:
     says: "The API rejects names longer than 100 characters"
     steps:
       - http: { method: POST, path: /api/profile, json: { name: "..." }, expect_status: 400 }
+
+  - id: save-failure-shown
+    says: "When saving fails, the page says so instead of 'Saved'"
+    steps:
+      - goto: /settings
+      - mock: { path: /api/profile, method: POST, status: 500 }
+      - click: { role: button, name: Save }
+      - expect_text: Could not save
+
+  - id: cli-export
+    says: "`mytool export` writes the profile as JSON"
+    steps:
+      - cmd: { run: mytool export --json, expect_output: '"name"' }
 ```
 
 The full step and locator reference is in the guide: run `provepr docs`, or read
@@ -166,17 +183,18 @@ The full step and locator reference is in the guide: run `provepr docs`, or read
 | Tool | Returns |
 |---|---|
 | `get_guide()` | the guide for coding agents (plan format, steps, rules) |
-| `run_proof(plan_path?, base_url?, claims?)` | the short report and one contact sheet image |
+| `run_proof(plan_path?, base_url?, claims?, keep_evidence?, save_baseline?, compare?)` | the short report and one contact sheet image |
 | `get_report(plan_path?, run?, include_json?)` | the latest (or a named) run's report, optionally with full JSON |
-| `get_frames(claim_id, steps?, plan_path?, run?)` | screenshots of the failing step and the one before it, or of any steps you ask for |
+| `get_frames(claim_id, steps?, plan_path?, run?)` | screenshots of the failing step and the one before it, of the steps that look different from the baseline (with diffs), or of any steps you ask for |
 
 ### Command line
 
 ```
 provepr init [dir] [--no-ci]                  # set up AGENTS.md, CLAUDE.md, plan, CI workflow, .gitignore
 provepr docs                                  # print the guide for coding agents
-provepr check [--plan PATH]                   # validate the plan; exits 1 on problems
-provepr run [--plan PATH] [--base-url URL] [--only ids] [--keep-evidence]  # exits 1 on any FAIL
+provepr check [--plan PATH] [--base REF]      # validate the plan (and that nothing was removed since REF)
+provepr run [--plan PATH] [--base-url URL] [--only ids] [--keep-evidence] [--save-baseline] [--compare]
+                                              # exits 1 on any FAIL
 provepr mcp                                   # serve the MCP tools over stdio
 ```
 
@@ -189,20 +207,32 @@ provepr mcp                                   # serve the MCP tools over stdio
 ├── report.md          what the agent reads
 ├── report.json        every step, error and timing
 ├── contact.png        one frame per claim, captioned PASS/FAIL
-├── frames/<claim>/NN.png
+├── frames/<claim>/NN.png       a screenshot (or terminal view, for `cmd`) after every step
+├── frames/<claim>/NN.diff.png  with --compare: what changed since the baseline, in red
 ├── videos/<claim>.webm
 └── app.log            output of the `start` command
 ```
 
-Screenshots and video are kept only for claims that FAILed, because the agent needs them to fix the
-code. Passing claims keep their report lines and their frame in `contact.png`. Only the newest 5 runs are
+Screenshots and video are kept only for claims that FAILed or look different from the baseline, because
+the agent needs them to fix the code. Passing claims keep their report lines and their frame in `contact.png`. Only the newest 5 runs are
 kept. A fully passing run of 12 claims takes about 190 KB instead of 3.2 MB. Use `--keep-evidence` to
 keep everything, e.g. to attach a video to a PR.
 
+### Visual changes against the base branch
+
+```
+git switch main && provepr run --save-baseline   # screens of every claim → .provepr/baseline/
+git switch -    && provepr run --compare         # "looks different from the baseline at step 3" + diff images
+```
+
+Both runs happen on the same machine, so fonts and rendering match and only real changes show. A visual
+change is reported, not judged: the agent decides whether it was intended.
+
 ## CI
 
-`provepr init` writes `.github/workflows/provepr.yml`. It installs Chromium, runs `provepr check`, runs every
-claim, and uploads `.provepr/runs/` as a build artifact even when the job fails. The `start:` command in the
+`provepr init` writes `.github/workflows/provepr.yml`. It installs Chromium, runs `provepr check --base`
+against the PR's base branch (so a PR can't quietly delete or loosen claims), runs every claim, and uploads
+`.provepr/runs/` as a build artifact even when the job fails. The `start:` command in the
 plan boots your app on the CI runner, so add the steps that install your app's dependencies where the
 workflow's comment shows. Don't hand-write this file: `init` produces the same tested template everywhere.
 
@@ -239,11 +269,11 @@ cd examples/demo_app && uv run --project ../.. provepr run
 
 ## Limits
 
-- Web apps only for now: browser steps plus `http` steps against the app's API. CLI tools and
-  background jobs are UNVERIFIED.
-- There is no step yet to simulate network failures in the browser, so a UI's own error messages are
-  hard to reach.
-- No screenshot diff against the base branch yet.
+- Web apps and command-line tools. Background jobs, email and native GUIs are UNVERIFIED.
+- `check --base` compares checks exactly. It can't tell whether changing a non-check step (e.g. which
+  page a `goto` opens) made a claim weaker; the plan diff in the PR shows that.
+- The screenshot diff needs two local runs (base branch, then yours) and is not part of the CI template,
+  because it boots the app twice.
 - Runs locally. Hosted runs on PR preview deployments (a GitHub App) are on the roadmap.
 
 ## Roadmap
@@ -252,11 +282,11 @@ cd examples/demo_app && uv run --project ../.. provepr run
 - [x] MCP server, skill, Claude Code and Codex plugin
 - [x] Bundled agent guide, `provepr init` (AGENTS.md, CI workflow), `provepr check`
 - [x] Accumulating plans, `--only`, `http` steps for API claims
-- [ ] Network mocking and failure steps in the browser
-- [ ] `provepr check --base main`: flag claims removed or weakened compared to the base branch
+- [x] Network mocking and failure steps in the browser (`mock`)
+- [x] `provepr check --base main`: flag claims removed or weakened compared to the base branch
+- [x] Screenshot diff against the base branch (`--save-baseline`, `--compare`)
+- [x] Terminal and CLI apps (`cmd`)
 - [ ] GitHub App: run on every PR against its preview deployment (Vercel, Netlify) and post a PR comment
-- [ ] Screenshot diff against the base branch
-- [ ] Terminal and CLI apps
 
 ## Contributing
 

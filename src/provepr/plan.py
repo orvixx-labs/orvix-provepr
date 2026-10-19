@@ -2,12 +2,20 @@
 
 import os
 import re
+import subprocess
 from pathlib import Path
 
 import yaml
 
 LOCATOR_KEYS = ("role", "label", "text", "placeholder", "testid", "css")
-HTTP_KEYS = {"method", "path", "json", "headers", "expect_status", "expect_body"}
+# step -> (required key, allowed keys) for steps that take a mapping of options
+KEYED = {
+    "http": ("path", {"method", "path", "json", "headers", "expect_status", "expect_body"}),
+    "mock": ("path", {"path", "method", "status", "body", "json", "fail", "delay"}),
+    "cmd": ("run", {"run", "stdin", "expect_exit", "expect_output", "timeout"}),
+}
+NUMBERS = {"expect_status", "status", "delay", "expect_exit", "timeout"}  # option keys that take a number
+CHECKS = {"http", "cmd"}  # steps that check something besides expect_*
 ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")  # ids become file names
 
 # step -> argument kind
@@ -24,8 +32,18 @@ STEPS = {
     "expect_text": "text",
     "expect_no_text": "text",
     "expect_url": "text",
-    "http": "http",
+    "http": "keyed",
+    "mock": "keyed",
+    "cmd": "keyed",
 }
+
+
+def is_check(action: str) -> bool:
+    return action.startswith("expect_") or action in CHECKS
+
+
+def action_of(step) -> str | None:
+    return next(iter(step)) if isinstance(step, dict) and step else None
 
 
 def step_problem(step) -> str | None:
@@ -44,11 +62,23 @@ def step_problem(step) -> str | None:
             return f"'{action}' needs a locator with one of {', '.join(LOCATOR_KEYS)}, got {arg!r}"
         if kind == "locator+value" and "value" not in arg:
             return f"'{action}' needs a 'value'"
-    if kind == "http":
-        if not isinstance(arg, dict) or "path" not in arg:
-            return f"'http' needs at least a 'path', got {arg!r}"
-        if extra := set(arg) - HTTP_KEYS:
-            return f"'http' has unknown keys {sorted(extra)}; allowed: {sorted(HTTP_KEYS)}"
+    if kind == "keyed":
+        need, allowed = KEYED[action]
+        if not isinstance(arg, dict) or need not in arg:
+            return f"'{action}' needs at least a '{need}', got {arg!r}"
+        if extra := set(arg) - allowed:
+            return f"'{action}' has unknown keys {sorted(extra)}; allowed: {sorted(allowed)}"
+        for k in NUMBERS & set(arg):
+            if not isinstance(arg[k], int | float) or isinstance(arg[k], bool) or arg[k] < 0:
+                return f"'{action}' {k} must be a number, got {arg[k]!r}"
+        if action == "mock":
+            faked = {"status", "body", "json"} & set(arg)
+            if not faked and not arg.get("fail") and not arg.get("delay"):
+                return "'mock' needs 'status', 'body', 'json', 'fail: true' or 'delay'"
+            if faked and arg.get("fail"):
+                return "'mock' can fail the request or answer it, not both"
+            if {"body", "json"} <= set(arg):
+                return "'mock' takes 'body' or 'json', not both"
     return None
 
 
@@ -57,11 +87,16 @@ def validate(plan, base_url: str | None = None) -> list[str]:
     if not isinstance(plan, dict):
         return ["the plan must be a YAML mapping with 'base_url' and 'claims'"]
     problems = []
-    if not (base_url or plan.get("base_url") or os.environ.get("PROVEPR_BASE_URL")):
-        problems.append("missing 'base_url' (or pass --base-url, or set PROVEPR_BASE_URL)")
     claims = plan.get("claims")
     if not isinstance(claims, list) or not claims:
-        return problems + ["'claims' must be a non-empty list"]
+        return ["'claims' must be a non-empty list"]
+    all_steps = [s for c in claims if isinstance(c, dict) and isinstance(c.get("steps"), list) for s in c["steps"]]
+    needs_url = any(action_of(s) != "cmd" for s in all_steps)  # only cmd steps run without the app's URL
+    if needs_url and not (base_url or plan.get("base_url") or os.environ.get("PROVEPR_BASE_URL")):
+        problems.append("missing 'base_url' (or pass --base-url, or set PROVEPR_BASE_URL)")
+    waivers = plan.get("waivers") or {}
+    if not isinstance(waivers, dict) or not all(isinstance(v, str) and v.strip() for v in waivers.values()):
+        problems.append("'waivers' must map claim ids to the reason, e.g. `old-id: feature removed on purpose`")
     seen = set()
     for i, c in enumerate(claims, 1):
         if not isinstance(c, dict):
@@ -83,9 +118,8 @@ def validate(plan, base_url: str | None = None) -> list[str]:
         for n, step in enumerate(steps, 1):
             if p := step_problem(step):
                 problems.append(f"{where} step {n}: {p}")
-        actions = [next(iter(s)) for s in steps if isinstance(s, dict) and s]
-        if steps and not any(a.startswith("expect_") or a == "http" for a in actions):
-            problems.append(f"{where}: has steps but no expect_* or http step, so it proves nothing")
+        if steps and not any(is_check(action_of(s) or "") for s in steps):
+            problems.append(f"{where}: has steps but no expect_*, http or cmd step, so it proves nothing")
     return problems
 
 
@@ -98,3 +132,42 @@ def load(path: Path, base_url: str | None = None) -> dict:
     if problems := validate(plan, base_url):
         raise ValueError(f"{path} has {len(problems)} problem(s):\n" + "\n".join(f"- {p}" for p in problems))
     return plan
+
+
+def git(cwd: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", "-C", str(cwd), *args], check=False, capture_output=True, text=True)
+
+
+def base_plan(path: Path, ref: str) -> dict | None:
+    """The plan as committed on `ref`, or None if `ref` has no plan at that path."""
+    if git(path.parent, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}").returncode:
+        raise ValueError(f"'{ref}' is not a commit in this git repository (in CI, fetch the base branch first)")
+    shown = git(path.parent, "show", f"{ref}:./{path.name}")
+    if shown.returncode:
+        return None
+    try:
+        old = yaml.safe_load(shown.stdout)
+    except yaml.YAMLError:
+        return None
+    return old if isinstance(old, dict) else None
+
+
+def weakened(plan: dict, base: dict) -> list[str]:
+    """Claims and checks that `base` had and `plan` lost. Steps are compared exactly, so an edited
+    expectation counts as removed. A claim is skipped when `plan` adds (or rewords) a waiver for it."""
+    old_waivers = base.get("waivers") if isinstance(base.get("waivers"), dict) else {}
+    waived = {cid for cid, why in (plan.get("waivers") or {}).items() if old_waivers.get(cid) != why}
+    now = {c["id"]: c.get("steps") or [] for c in plan["claims"]}
+    problems = []
+    for c in base.get("claims") or []:
+        cid = c.get("id") if isinstance(c, dict) else None
+        if not cid or cid in waived:
+            continue
+        if cid not in now:
+            problems.append(f"claim '{cid}' was removed")
+            continue
+        for step in c.get("steps") or []:
+            if is_check(action_of(step) or "") and step not in now[cid]:
+                flow = yaml.safe_dump(step, default_flow_style=True, width=1000).strip()
+                problems.append(f"claim '{cid}': check removed or changed: `{flow}`")
+    return problems

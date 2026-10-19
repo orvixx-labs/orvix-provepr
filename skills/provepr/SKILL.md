@@ -1,6 +1,6 @@
 ---
 name: provepr
-description: Prove a change a user can see or trigger (pages, forms, buttons, flows, or the API behind them) actually works before claiming it is done or opening a PR. Adds claims to .provepr/plan.yaml, runs them in a real browser with the provepr MCP tools, and fixes what fails.
+description: Prove a change a user can see or trigger (pages, forms, buttons, flows, the API behind them, or a command-line tool) actually works before claiming it is done or opening a PR. Adds claims to .provepr/plan.yaml, runs them in a real browser (or as shell commands) with the provepr MCP tools, and fixes what fails.
 ---
 
 # provepr

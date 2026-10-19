@@ -9,6 +9,7 @@ from importlib.metadata import version
 from pathlib import Path
 
 BEGIN, END = "<!-- BEGIN:provepr-agent-rules -->", "<!-- END:provepr-agent-rules -->"
+IGNORED = (".provepr/runs/", ".provepr/baseline/")  # evidence and visual baseline: local output, never committed
 
 AGENTS_BLOCK = f"""{BEGIN}
 ## provepr: prove UI changes before calling them done
@@ -50,6 +51,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - name: Fetch the base branch (provepr check --base compares the plan with it)
+        run: git fetch --depth=1 origin "+refs/heads/$GITHUB_BASE_REF:refs/remotes/origin/$GITHUB_BASE_REF"
       - uses: astral-sh/setup-uv@v6
 
       # Install what the plan's `start:` command needs, for example:
@@ -59,8 +62,8 @@ jobs:
 
       - name: Install Chromium
         run: uvx playwright@PLAYWRIGHT_VERSION install --with-deps chromium
-      - name: Check the plan
-        run: uvx --from "INSTALL_SPEC" provepr check
+      - name: Check the plan (and that no claim was removed or weakened)
+        run: uvx --from "INSTALL_SPEC" provepr check --base "origin/$GITHUB_BASE_REF"
       - name: Run the claims
         run: uvx --from "INSTALL_SPEC" provepr run
       - name: Upload evidence
@@ -112,9 +115,9 @@ def init(root: Path, ci: bool = True) -> list[str]:
     write(".provepr/plan.yaml", plan if plan is not None else STARTER_PLAN, plan)
 
     gitignore = read(".gitignore")
-    if gitignore is None or ".provepr/runs/" not in gitignore.splitlines():
+    if missing := [line for line in IGNORED if line not in (gitignore or "").splitlines()]:
         base = (gitignore or "").rstrip()
-        write(".gitignore", (base + "\n" if base else "") + ".provepr/runs/\n", gitignore)
+        write(".gitignore", (base + "\n" if base else "") + "\n".join(missing) + "\n", gitignore)
     else:
         done.append("unchanged  .gitignore")
 

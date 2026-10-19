@@ -1,7 +1,7 @@
 {
   "name": "provepr",
-  "version": "0.1.0",
-  "description": "Make your coding agent prove its UI change works: runs the change's claims in a real browser and returns evidence (step results, HTTP/console errors, screenshots, video) so the agent fixes what fails.",
+  "version": "0.2.0",
+  "description": "Make your coding agent prove its change works: runs the change's claims in a real browser, against the API and as shell commands, and returns evidence (step results, HTTP/console errors, command output, screenshots, video) so the agent fixes what fails.",
   "author": {
     "name": "Orvix Labs",
     "url": "https://github.com/orvixx-labs"

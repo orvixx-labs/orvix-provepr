@@ -3,3 +3,6 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .provepr/runs/
+.provepr/baseline/
+/ARCHITECTURE.md
+docs/PLANNED_FEATURES.md
