@@ -31,6 +31,9 @@ def test_catches_planted_bug(tmp_path):
     assert bad["status"] == "FAIL"
     assert any("HTTP 500 POST" in r for r in bad["reasons"])
     assert [s["ok"] for s in bad["steps"]] == [True] * 5 + [False]  # UI said "Saved" anyway
+    # The 500 already failed the claim, so step 6 stops waiting instead of using its full 5 s timeout.
+    assert "stopped waiting, the claim already failed (HTTP 500" in bad["steps"][5]["error"]
+    assert "Actual value" in bad["steps"][5]["error"] and bad["steps"][5]["ms"] < 2000
     for f in ("report.json", "report.md", "contact.png"):
         assert (run_dir / f).exists(), f
     assert len((run_dir / "report.md").read_text()) < 4000  # stays cheap for the agent
@@ -183,3 +186,12 @@ def test_screens_compared_with_baseline(tmp_path):
     assert "looks different from the baseline at step 1, 2, 3, 4: up to" in md
     frames = asyncio.run(server.get_frames("page-loads", plan_path=rep["plan"]))
     assert any(isinstance(x, str) and "diff from the baseline" in x for x in frames)
+
+
+def test_parallel_claims_report_like_sequential(tmp_path):
+    plan = copy_demo(tmp_path, fixed=False)
+    plan.write_text(plan.read_text() + "\nparallel: 3\n")
+    _, rep = runner.run_plan(plan)
+    assert [c["id"] for c in rep["claims"]] == ["page-loads", "save-persists", "profile-api", "name-length-limit"]
+    assert [c["status"] for c in rep["claims"]] == ["PASS", "FAIL", "PASS", "UNVERIFIED"]
+    assert "--only save-persists" in rep["claims"][1]["note"]  # a FAIL is reported as is, with a hint

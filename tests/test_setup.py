@@ -41,6 +41,7 @@ def test_check_new_steps():
     assert "not both" in problems({"mock": {"path": "/a", "fail": True, "status": 500}}, **ok)
     assert "proves nothing" in problems({"mock": {"path": "/a", "delay": 9}}, {"goto": "/"}, **ok)
     assert "'waivers' must map" in problems({"cmd": {"run": "ls"}}, waivers={"a": ""})
+    assert "'parallel' must be a whole number" in problems({"cmd": {"run": "ls"}}, parallel=0)
 
 
 def test_check_base_flags_removed_and_changed_checks(tmp_path):

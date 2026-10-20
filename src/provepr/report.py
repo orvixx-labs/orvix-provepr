@@ -142,6 +142,8 @@ def to_markdown(report: dict) -> str:
             if not s["ok"]:
                 lines.append(f"- FAILED step {s['n']} `{step_label(s['step'])}`: {s['error']}")
         lines += [f"- {r}" for r in cl["reasons"] if not r.startswith("step ")][:MAX_LISTED]
+        if cl.get("note"):
+            lines.append(f"- {cl['note']}")
         lines += [f"- console error: {e}" for e in dict.fromkeys(cl["console_errors"])][:MAX_LISTED]
         lines += [
             f"- HTTP {n['status']} {n['method']} {n['url']}"

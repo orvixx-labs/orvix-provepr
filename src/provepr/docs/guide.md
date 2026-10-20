@@ -49,6 +49,8 @@ base_url: http://localhost:3000   # where the app answers (or pass --base-url / 
 start: npm run dev                # command that starts the app, run from the project root.
                                   # Required for CI. Omit locally if the app is already running.
 start_timeout: 30                 # seconds to wait for base_url to answer (default 30)
+parallel: 4                       # optional: run claims on 4 browsers at once (default 1). Only for claims
+                                  # that don't depend on each other's data; see "Speed" below.
 waivers:                          # optional: claims you weakened or removed ON PURPOSE, with the reason.
   old-export: "CSV export was removed in this PR"   # only a new or reworded waiver counts
 
@@ -74,7 +76,9 @@ claims:
 ```
 
 Each claim runs in a fresh browser (no shared cookies or storage) at 1280×720. Steps run in order, and
-the first failing step stops the claim. Every action and expectation times out after 5 seconds.
+the first failing step stops the claim. Every action and expectation times out after 5 seconds, but an
+expectation stops waiting as soon as the claim has already failed for another reason (an HTTP 5xx, a page
+error or a failed request), so a broken save doesn't cost 5 seconds per later step.
 A plan whose steps are all `cmd` steps (a CLI tool) needs no `base_url`, and starts no browser.
 
 ### Steps
@@ -177,6 +181,18 @@ Console errors and HTTP 4xx responses from the page are listed for you to judge 
 `provepr check` rejects plans with unknown steps, bad arguments, duplicate or unsafe ids, a missing `says`,
 or a claim whose steps contain no `expect_*`, `http` or `cmd` step (all actions and nothing checked).
 With `--base <ref>` it also rejects claims and checks removed since that git ref (see Rules).
+
+## Speed
+
+Most of a run is spent waiting: an expectation that never comes true waits out its 5 seconds. Two things
+keep that short:
+
+- **Failed claims stop waiting** (always on, see above).
+- **`parallel: N`** runs claims on N browsers at once, so slow claims overlap. A suite of 12 claims took
+  3.9 s with `parallel: 4` instead of 6.9 s. Claims share the app and its data, so use it only when claims
+  don't read what other claims write (two claims saving different names at once will break each other).
+  A FAIL in a parallel run is reported as is, with a hint: if it looks wrong, rerun that claim alone with
+  `--only <id>`. If it then passes, the claims clash; turn `parallel` off.
 
 ## Visual changes against the base branch
 

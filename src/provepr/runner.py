@@ -5,8 +5,10 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
@@ -17,6 +19,7 @@ from playwright.sync_api import expect, sync_playwright
 from provepr import plan as planfile
 
 STEP_TIMEOUT_MS = 5000
+SLICE_MS = 250  # expectations retry in slices this long, so a claim that already failed stops waiting
 CMD_TIMEOUT_S = 30
 VIEWPORT = {"width": 1280, "height": 720}
 KEEP_RUNS = 5  # older run folders are deleted when a new run starts
@@ -134,8 +137,40 @@ def terminal_frame(transcript: str, path: Path) -> None:
     im.save(path)
 
 
-def do_step(page, base_url: str, step: dict, mocked: list) -> str | None:
-    """Execute one (already validated) browser or http step. Returns an optional note; raises on failure."""
+def failure_reasons(result: dict) -> list[str]:
+    """Why the claim FAILs regardless of its steps: page errors, HTTP 5xx, failed requests."""
+    reasons = [f"uncaught page error: {e}" for e in result["page_errors"]]
+    reasons += [
+        f"HTTP {n['status']} {n['method']} {n['url']}" for n in result["network_errors"] if (n["status"] or 0) >= 500
+    ]
+    reasons += [
+        f"request failed: {n['method']} {n['url']} ({n['failure']})"
+        for n in result["network_errors"]
+        if n["status"] is None
+    ]
+    return reasons
+
+
+def patiently(check, failed) -> None:
+    """Retry an expectation for up to STEP_TIMEOUT_MS, but give up as soon as `failed()` has a reason:
+    the claim is a FAIL anyway, so waiting out the timeout only costs time."""
+    deadline = time.monotonic() + STEP_TIMEOUT_MS / 1000
+    while True:
+        left_ms = (deadline - time.monotonic()) * 1000
+        try:
+            return check(max(1, min(SLICE_MS, left_ms)))
+        except AssertionError as e:
+            if time.monotonic() >= deadline:
+                raise
+            if reasons := failed():
+                raise AssertionError(f"stopped waiting, the claim already failed ({reasons[0]}): {e}") from e
+
+
+def do_step(page, base_url: str, step: dict, mocked: list, failed=list) -> str | None:
+    """Execute one (already validated) browser or http step. Returns an optional note; raises on failure.
+
+    failed: returns the claim's failure reasons so far; expectations stop waiting once there are any.
+    """
     ((action, arg),) = step.items()
     t = STEP_TIMEOUT_MS
     match action:
@@ -158,13 +193,13 @@ def do_step(page, base_url: str, step: dict, mocked: list) -> str | None:
         case "press":
             page.keyboard.press(str(arg))
         case "expect_text":
-            expect(page.locator("body")).to_contain_text(str(arg), timeout=t)
+            patiently(lambda ms: expect(page.locator("body")).to_contain_text(str(arg), timeout=ms), failed)
         case "expect_no_text":
-            expect(page.locator("body")).not_to_contain_text(str(arg), timeout=t)
+            patiently(lambda ms: expect(page.locator("body")).not_to_contain_text(str(arg), timeout=ms), failed)
         case "expect_visible":
-            expect(locate(page, arg).first).to_be_visible(timeout=t)
+            patiently(lambda ms: expect(locate(page, arg).first).to_be_visible(timeout=ms), failed)
         case "expect_value":
-            expect(locate(page, arg)).to_have_value(str(arg["value"]), timeout=t)
+            patiently(lambda ms: expect(locate(page, arg)).to_have_value(str(arg["value"]), timeout=ms), failed)
         case "expect_url":
             page.wait_for_url(f"**{arg}**", timeout=t)
         case _:
@@ -237,7 +272,7 @@ def run_claim(browser, base_url: str | None, claim: dict, out: Path, root: Path,
                 rec["output"], problem = cmd_step(root, step["cmd"])
                 if problem:
                     raise AssertionError(problem)
-            elif note := do_step(page, base_url, step, mocked):
+            elif note := do_step(page, base_url, step, mocked, lambda: failure_reasons(result)):
                 rec["note"] = note
         except (PlaywrightError, AssertionError, ValueError, KeyError, TypeError) as e:
             rec.update(ok=False, error=short_error(e))
@@ -266,18 +301,13 @@ def run_claim(browser, base_url: str | None, claim: dict, out: Path, root: Path,
         result["video"] = str(dest.relative_to(out))
 
     reasons = [f"step {s['n']} failed: {s['error']}" for s in result["steps"] if not s["ok"]]
-    reasons += [f"uncaught page error: {e}" for e in result["page_errors"]]
-    reasons += [
-        f"HTTP {n['status']} {n['method']} {n['url']}" for n in result["network_errors"] if (n["status"] or 0) >= 500
-    ]
-    reasons += [
-        f"request failed: {n['method']} {n['url']} ({n['failure']})"
-        for n in result["network_errors"]
-        if n["status"] is None
-    ]
+    reasons += failure_reasons(result)
     result["status"] = "FAIL" if reasons else "PASS"
     result["reasons"] = reasons
     return result
+
+
+_install_lock = threading.Lock()  # parallel workers must not download Chromium twice at once
 
 
 def launch(pw):
@@ -287,9 +317,38 @@ def launch(pw):
     except PlaywrightError as e:
         if "Executable doesn't exist" not in str(e):
             raise
-    # stdout goes to stderr: under MCP, stdout is the protocol stream.
-    subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], stdout=sys.stderr, check=True)
+    with _install_lock:
+        # stdout goes to stderr: under MCP, stdout is the protocol stream.
+        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], stdout=sys.stderr, check=True)
     return pw.chromium.launch()
+
+
+def run_claims(claims: list[dict], base_url, out: Path, root: Path, video: bool, workers: int) -> list[dict]:
+    """Run claims, split over `workers` threads each with its own browser, so slow claims overlap.
+
+    Turning parallel on says the claims don't share data, so a FAIL is reported as is. Its note points to
+    rerunning it alone, in case two claims did clash.
+    """
+
+    def batch(chunk: list[dict]) -> list[dict]:
+        if not any(needs_browser(c) for c in chunk):
+            return [run_claim(None, base_url, c, out, root) for c in chunk]
+        with sync_playwright() as pw:  # one per thread: sync Playwright objects can't cross threads
+            browser = launch(pw)
+            try:
+                return [run_claim(browser, base_url, c, out, root, video) for c in chunk]
+            finally:
+                browser.close()
+
+    workers = min(workers, len(claims))
+    if workers <= 1:
+        return batch(claims)
+    with ThreadPoolExecutor(workers) as pool:
+        done = {r["id"]: r for rs in pool.map(batch, [claims[i::workers] for i in range(workers)]) for r in rs}
+    for r in done.values():
+        if r["status"] == "FAIL":
+            r["note"] = f"ran in parallel: if this looks wrong, rerun it alone with --only {r['id']}"
+    return [done[c["id"]] for c in claims]
 
 
 def wait_for_url(url: str, timeout_s: float = 30) -> None:
@@ -354,13 +413,7 @@ def run_plan(
         except TimeoutError as e:
             tail = (out / "app.log").read_text()[-1500:] if server else ""
             raise TimeoutError(f"{e}\n--- app.log (tail) ---\n{tail}" if tail else str(e)) from None
-        if any(needs_browser(c) for c in claims_to_run):
-            with sync_playwright() as pw:
-                browser = launch(pw)
-                claims = [run_claim(browser, base_url, c, out, root, video) for c in claims_to_run]
-                browser.close()
-        else:
-            claims = [run_claim(None, base_url, c, out, root) for c in claims_to_run]
+        claims = run_claims(claims_to_run, base_url, out, root, video, plan.get("parallel", 1))
     finally:
         if server and server.poll() is None:
             os.killpg(server.pid, signal.SIGTERM)

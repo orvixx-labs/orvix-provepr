@@ -94,6 +94,9 @@ def validate(plan, base_url: str | None = None) -> list[str]:
     needs_url = any(action_of(s) != "cmd" for s in all_steps)  # only cmd steps run without the app's URL
     if needs_url and not (base_url or plan.get("base_url") or os.environ.get("PROVEPR_BASE_URL")):
         problems.append("missing 'base_url' (or pass --base-url, or set PROVEPR_BASE_URL)")
+    parallel = plan.get("parallel", 1)
+    if not isinstance(parallel, int) or isinstance(parallel, bool) or not 1 <= parallel <= 16:
+        problems.append(f"'parallel' must be a whole number of workers from 1 to 16, got {parallel!r}")
     waivers = plan.get("waivers") or {}
     if not isinstance(waivers, dict) or not all(isinstance(v, str) and v.strip() for v in waivers.values()):
         problems.append("'waivers' must map claim ids to the reason, e.g. `old-id: feature removed on purpose`")
