@@ -4,11 +4,16 @@ from importlib.resources import files
 from pathlib import Path
 
 from provepr import plan, report, runner
-from provepr.init import init
+from provepr.init import init, stale
 
 
 def guide() -> str:
     return (files("provepr") / "docs" / "guide.md").read_text()
+
+
+def warn_stale(plan_path: Path) -> None:
+    for note in stale(plan_path.resolve().parent.parent):  # the repo that holds .provepr/
+        print(f"provepr: {note}", file=sys.stderr)
 
 
 def main() -> None:
@@ -42,6 +47,7 @@ def main() -> None:
             print("\n".join(init(args.dir, ci=not args.no_ci)))
             print("\nNext: edit base_url/start in .provepr/plan.yaml, then ask your agent to add claims.")
         case "check":
+            warn_stale(args.plan)
             try:
                 p = plan.load(args.plan)
                 old = plan.base_plan(args.plan, args.base) if args.base else None
@@ -65,6 +71,7 @@ def main() -> None:
 
             mcp.run()
         case "run":
+            warn_stale(args.plan)
             only = [c.strip() for c in args.only.split(",") if c.strip()] if args.only else None
             try:
                 run_dir, rep = runner.run_plan(args.plan, args.base_url, only, args.keep_evidence)

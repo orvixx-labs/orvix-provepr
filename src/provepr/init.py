@@ -1,10 +1,11 @@
 """`provepr init`: set a repo up so any coding agent and CI use provepr the same way.
 
 Everything here is a fixed template: identical for every project, so a command writes it
-instead of letting each agent improvise. Safe to run again: existing files are kept, and only
-the marked AGENTS.md block is refreshed.
+instead of letting each agent improvise. Safe to run again: existing files are kept, except the
+marked AGENTS.md block and a CI workflow nobody edited, which are brought up to this version.
 """
 
+import re
 from importlib.metadata import version
 from pathlib import Path
 
@@ -12,14 +13,15 @@ BEGIN, END = "<!-- BEGIN:provepr-agent-rules -->", "<!-- END:provepr-agent-rules
 IGNORED = (".provepr/runs/", ".provepr/baseline/")  # evidence and visual baseline: local output, never committed
 
 AGENTS_BLOCK = f"""{BEGIN}
-## provepr: prove UI changes before calling them done
+## provepr: prove changes before calling them done
 
-This project uses provepr. Before you say a change a user can see or trigger is done, or open a PR for it:
+This project uses provepr. Before you say a change is done, or open a PR for it (UI, API, or command-line
+tool: provepr checks all three):
 
 1. Read the guide for the installed version: run `provepr docs` (or call the provepr `get_guide` MCP tool).
    It is the source of truth for the plan format and rules.
 2. Add claims for your change to `.provepr/plan.yaml` BEFORE running. Keep the existing claims.
-3. Run `provepr check`, then `provepr run` (or the `run_proof` tool). Fix the code until no claim FAILs.
+3. Run `provepr check --base <base branch>`, then `provepr run` (or the `run_proof` tool). Fix the code until no claim FAILs.
 4. Never delete claims or loosen expectations to make a run pass. Report FAIL and UNVERIFIED claims honestly.
 
 This block is managed by `provepr init`; edit outside the markers.
@@ -76,6 +78,55 @@ jobs:
 """
 
 
+# Earlier versions' workflow templates: a file still matching one (apart from version pins) was never
+# edited, so `init` may replace it. Add the old template here whenever WORKFLOW changes.
+FETCH_STEP = WORKFLOW[WORKFLOW.index("      - name: Fetch") : WORKFLOW.index("      - uses: astral-sh")]
+OLD_WORKFLOWS = (  # 0.1.x
+    WORKFLOW.replace(FETCH_STEP, "").replace(
+        'Check the plan (and that no claim was removed or weakened)\n        run: uvx --from "INSTALL_SPEC" provepr check --base "origin/$GITHUB_BASE_REF"',
+        'Check the plan\n        run: uvx --from "INSTALL_SPEC" provepr check',
+    ),
+)
+
+
+PIN = re.compile(r"orvix-provepr==([^\"\s]+)")
+EDITED = (
+    "provepr.yml was edited, so `provepr init` keeps it, but it pins an older provepr: update the pin and"
+    " compare it with the template (delete it and rerun `provepr init` to see it)."
+)
+
+
+def pinned() -> str:
+    # CI pins the same provepr (and so the same guide and plan format) that wrote this file.
+    install = f"orvix-provepr=={version('orvix-provepr')}"
+    return WORKFLOW.replace("PLAYWRIGHT_VERSION", version("playwright")).replace("INSTALL_SPEC", install)
+
+
+def unedited(workflow: str) -> bool:
+    """True if `workflow` is a template `init` wrote (any version), with only its version pins differing."""
+    workflow = PIN.sub("INSTALL_SPEC", workflow)
+    return re.sub(r"playwright@\S+", "playwright@PLAYWRIGHT_VERSION", workflow) in (WORKFLOW, *OLD_WORKFLOWS)
+
+
+def pins_older(workflow: str) -> bool:
+    return any(v != version("orvix-provepr") for v in PIN.findall(workflow))
+
+
+def stale(root: Path) -> list[str]:
+    """Notes on files `provepr init` wrote that are behind the installed version."""
+    notes = []
+    agents = root / "AGENTS.md"
+    if agents.exists() and BEGIN in (text := agents.read_text()) and upsert_block(text) != text:
+        notes.append("AGENTS.md has an older provepr block: run `provepr init` to refresh it.")
+    wf = root / ".github/workflows/provepr.yml"
+    if wf.exists() and (old := wf.read_text()) != pinned():
+        if unedited(old):
+            notes.append("provepr.yml is out of date: run `provepr init` to update it.")
+        elif pins_older(old):
+            notes.append(EDITED)
+    return notes
+
+
 def upsert_block(text: str) -> str:
     if BEGIN in text and END in text:
         head, rest = text.split(BEGIN, 1)
@@ -123,8 +174,8 @@ def init(root: Path, ci: bool = True) -> list[str]:
 
     if ci:
         wf = read(".github/workflows/provepr.yml")
-        # CI pins the same provepr (and so the same guide and plan format) that wrote this file.
-        install = f"orvix-provepr=={version('orvix-provepr')}"
-        new = WORKFLOW.replace("PLAYWRIGHT_VERSION", version("playwright")).replace("INSTALL_SPEC", install)
-        write(".github/workflows/provepr.yml", wf if wf is not None else new, wf)  # never clobber edits
+        keep = wf is not None and not unedited(wf)  # never clobber edits
+        write(".github/workflows/provepr.yml", wf if keep else pinned(), wf)
+        if keep and pins_older(wf):
+            done.append(f"note: {EDITED}")
     return done

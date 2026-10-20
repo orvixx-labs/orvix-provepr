@@ -48,7 +48,9 @@ cd your-app && provepr init
 | `.github/workflows/provepr.yml` | A CI job that runs `provepr check --base <PR base>`, then `provepr run`, on every PR and uploads the evidence |
 | `.gitignore` | `.provepr/runs/` and `.provepr/baseline/` |
 
-Running it again changes nothing. Existing files are kept, and only the marked AGENTS.md block is refreshed.
+Running it again changes nothing. Existing files are kept, except the marked AGENTS.md block and a CI
+workflow you haven't edited, which are brought up to the installed version. After an upgrade, `provepr check`
+and `provepr run` tell you when to rerun `init`.
 After that, just ask your agent for changes as usual.
 
 ## How it works

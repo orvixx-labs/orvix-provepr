@@ -1,11 +1,12 @@
 import subprocess
 import sys
+from importlib.metadata import version
 
 import pytest
 import yaml
 
 from provepr import plan
-from provepr.init import BEGIN, END, init
+from provepr.init import BEGIN, EDITED, END, OLD_WORKFLOWS, init, stale
 
 
 def test_check_lists_every_problem():
@@ -107,6 +108,26 @@ def test_init_is_idempotent_and_keeps_user_content(tmp_path):
     workflow = yaml.safe_load((tmp_path / ".github/workflows/provepr.yml").read_text())
     steps = [s.get("run", "") for s in workflow["jobs"]["provepr"]["steps"]]
     assert any("provepr check --base" in s for s in steps) and any("provepr run" in s for s in steps)
+
+
+def test_init_upgrades_what_an_older_version_wrote(tmp_path):
+    wf = tmp_path / ".github/workflows/provepr.yml"
+    wf.parent.mkdir(parents=True)
+    v010 = OLD_WORKFLOWS[0].replace("INSTALL_SPEC", "orvix-provepr==0.1.0").replace("PLAYWRIGHT_VERSION", "1.40.0")
+    wf.write_text(v010)
+    (tmp_path / "AGENTS.md").write_text(f"{BEGIN}\nold rules\n{END}\n")
+    assert len(stale(tmp_path)) == 2
+    init(tmp_path)
+    assert stale(tmp_path) == []
+    assert "provepr check --base" in wf.read_text() and "old rules" not in (tmp_path / "AGENTS.md").read_text()
+
+    edited = v010.replace("# - run: npm ci", "- run: npm ci")
+    wf.write_text(edited)
+    assert stale(tmp_path) == [EDITED]
+    assert f"note: {EDITED}" in init(tmp_path) and wf.read_text() == edited  # edits are never overwritten
+
+    wf.write_text(edited.replace("0.1.0", version("orvix-provepr")))
+    assert stale(tmp_path) == []  # edited but on this version: nothing to say
 
 
 def test_docs_command_prints_bundled_guide():
