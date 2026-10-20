@@ -5,7 +5,7 @@
 Before an agent (Claude Code, Codex, Cursor, or anything that reads `AGENTS.md`) calls a change done or
 opens a PR, it writes down what the change claims and how to check it. provepr runs those checks in a real
 browser, against the app's HTTP API and as shell commands, and hands back facts: which step failed, HTTP 5xx
-responses, page and console errors, command output, a screenshot after every step, and a video. The agent fixes what failed and runs the checks again. By the time a human opens
+responses, page and console errors, command output, and screenshots of what went wrong. The agent fixes what failed and runs the checks again. By the time a human opens
 the PR, each claim is marked PASS, FAIL or UNVERIFIED.
 
 provepr never calls an LLM. The agent's own model writes the plan and reads the evidence. provepr only runs
@@ -61,7 +61,7 @@ After that, just ask your agent for changes as usual.
    ▼
  provepr
    ├─ starts the app (optional `start:` command) and waits for it
-   ├─ runs each claim in headless Chromium: video, a screenshot after every step,
+   ├─ runs each claim in headless Chromium: a screenshot after every step,
    │  console errors, page errors, every HTTP 4xx/5xx and failed request,
    │  plus `http` steps that call the app's API directly, `mock` steps that fake
    │  failing or slow requests, and `cmd` steps that run shell commands
@@ -207,16 +207,17 @@ provepr mcp                                   # serve the MCP tools over stdio
 ├── report.md          what the agent reads
 ├── report.json        every step, error and timing
 ├── contact.png        one frame per claim, captioned PASS/FAIL
-├── frames/<claim>/NN.png       a screenshot (or terminal view, for `cmd`) after every step
+├── frames/<claim>/NN.png       screenshots (or terminal views, for `cmd`) the agent needs to fix a failure
 ├── frames/<claim>/NN.diff.png  with --compare: what changed since the baseline, in red
-├── videos/<claim>.webm
 └── app.log            output of the `start` command
 ```
 
-Screenshots and video are kept only for claims that FAILed or look different from the baseline, because
-the agent needs them to fix the code. Passing claims keep their report lines and their frame in `contact.png`. Only the newest 5 runs are
-kept. A fully passing run of 12 claims takes about 190 KB instead of 3.2 MB. Use `--keep-evidence` to
-keep everything, e.g. to attach a video to a PR.
+`report.md` and `report.json` are always written. A screenshot is taken after every step, but when the run
+ends only the ones the agent needs are kept: for each FAILed claim, the failing step and the one before it,
+plus any screenshot that looks different from the baseline. Passing claims keep only their tile in
+`contact.png`. No video is recorded, and only the newest 5 runs are kept. On the demo app a run with one
+failing claim takes 60 KB (24 KB of it the contact sheet), down from 168 KB with every frame and a video.
+Use `--keep-evidence` to keep every screenshot and record a video per claim, e.g. to attach one to a PR.
 
 ### Visual changes against the base branch
 

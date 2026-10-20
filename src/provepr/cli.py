@@ -19,7 +19,7 @@ def main() -> None:
     run.add_argument("--plan", type=Path, default=Path(".provepr/plan.yaml"))
     run.add_argument("--base-url", help="overrides base_url in the plan (or set PROVEPR_BASE_URL)")
     run.add_argument("--only", help="comma-separated claim ids to run (default: all)")
-    run.add_argument("--keep-evidence", action="store_true", help="keep screenshots and video of passing claims too")
+    run.add_argument("--keep-evidence", action="store_true", help="keep every screenshot and record video")
     run.add_argument("--save-baseline", action="store_true", help="save this run's screens as the visual baseline")
     run.add_argument("--compare", action="store_true", help="report screens that look different from the baseline")
 
@@ -67,7 +67,7 @@ def main() -> None:
         case "run":
             only = [c.strip() for c in args.only.split(",") if c.strip()] if args.only else None
             try:
-                run_dir, rep = runner.run_plan(args.plan, args.base_url, only)
+                run_dir, rep = runner.run_plan(args.plan, args.base_url, only, args.keep_evidence)
             except (OSError, ValueError, TimeoutError) as e:
                 sys.exit(f"provepr: {e}")
             print(report.write(run_dir, rep, args.keep_evidence, args.compare, args.save_baseline))

@@ -31,7 +31,7 @@ def test_catches_planted_bug(tmp_path):
     assert bad["status"] == "FAIL"
     assert any("HTTP 500 POST" in r for r in bad["reasons"])
     assert [s["ok"] for s in bad["steps"]] == [True] * 5 + [False]  # UI said "Saved" anyway
-    for f in ("report.json", "report.md", "contact.png", "videos/save-persists.webm"):
+    for f in ("report.json", "report.md", "contact.png"):
         assert (run_dir / f).exists(), f
     assert len((run_dir / "report.md").read_text()) < 4000  # stays cheap for the agent
 
@@ -70,7 +70,7 @@ def test_mcp_errors_reach_the_agent(tmp_path):
         asyncio.run(server.run_proof(plan_path=str(plan)))
 
 
-def test_evidence_kept_only_for_failures_and_recent_runs(tmp_path):
+def test_evidence_kept_only_where_the_agent_needs_it(tmp_path):
     plan = copy_demo(tmp_path, fixed=False)
     runs = plan.parent / "runs"
     for i in range(6):  # five pretend older runs
@@ -79,13 +79,20 @@ def test_evidence_kept_only_for_failures_and_recent_runs(tmp_path):
     report.write(run_dir, rep)
 
     assert len(list(runs.iterdir())) == runner.KEEP_RUNS and run_dir.exists()
-    assert not (run_dir / "frames" / "page-loads").exists()  # passed: deleted
-    assert not (run_dir / "videos" / "page-loads.webm").exists()
-    assert (run_dir / "frames" / "save-persists").exists()  # failed: kept
-    assert (run_dir / "videos" / "save-persists.webm").exists()
+    assert not (run_dir / "videos").exists()  # no video unless asked for
+    assert not (run_dir / "frames" / "page-loads").exists()  # passed: no frames
+    kept = sorted(p.name for p in (run_dir / "frames" / "save-persists").iterdir())
+    assert kept == ["05.png", "06.png"]  # failed at step 6: that step and the one before
     assert (run_dir / "contact.png").exists()
     msg = asyncio.run(server.get_frames("page-loads", plan_path=rep["plan"]))
-    assert "deleted after passing" in msg[0]
+    assert "only failing and changed steps keep their frames" in msg[0]
+    msg = asyncio.run(server.get_frames("save-persists", steps=[1], plan_path=rep["plan"]))
+    assert "kept: steps [5, 6]" in msg[0]
+
+    run_dir, rep = runner.run_plan(plan, only=["page-loads"], video=True)
+    report.write(run_dir, rep, keep_evidence=True)
+    assert (run_dir / "videos" / "page-loads.webm").exists()
+    assert len(list((run_dir / "frames" / "page-loads").iterdir())) == 4
 
 
 def add_claims(plan: Path, yaml_text: str) -> Path:

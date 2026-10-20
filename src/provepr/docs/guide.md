@@ -5,7 +5,7 @@ When it disagrees with what you remember about provepr, this guide is right.
 
 provepr checks the claims a change makes by running them in a real browser, against the app's HTTP
 API, and as shell commands. It reports facts: step results, HTTP errors, page and console errors,
-command output, screenshots and video. It never calls an LLM. **You** decide what to check and judge
+command output and screenshots. It never calls an LLM. **You** decide what to check and judge
 the evidence; provepr runs it.
 
 ## When to use it
@@ -214,13 +214,13 @@ ones as bugs, and mention intended ones in the PR. Dynamic content (times, rando
 | | `get_frames(claim_id, steps?)` | Screenshots of the failing step and the one before it (or of the steps that look different, with their diffs) |
 
 Each run writes `.provepr/runs/<run>/` containing `report.md`, `report.json`, `contact.png`,
-`frames/<claim>/NN.png` (plus `NN.diff.png` with `--compare`), `videos/<claim>.webm`, and `app.log`
-(output of `start`).
+`frames/<claim>/NN.png` (plus `NN.diff.png` with `--compare`), and `app.log` (output of `start`).
 
-To save disk space, screenshots and video are kept only for claims that FAILed or look different from
-the baseline. Passing claims keep their report lines and their frame in `contact.png`. Only the newest 5
-runs are kept. Add `--keep-evidence`
-(`keep_evidence` in `run_proof`) when someone needs the full recordings, e.g. a video for a PR.
+To save disk space, a FAILed claim keeps only the screenshot of its failing step and the one before it
+(the last step, if it failed for another reason, e.g. an HTTP 500), and any screenshot that looks different
+from the baseline is kept. Passing claims keep their report lines and their tile in `contact.png`. No video
+is recorded, and only the newest 5 runs are kept. Add `--keep-evidence` (`keep_evidence` in `run_proof`)
+to keep every screenshot and record a video per claim (`videos/<claim>.webm`), e.g. for a PR.
 
 ## Reporting
 

@@ -154,42 +154,53 @@ def to_markdown(report: dict) -> str:
                 f"{max(s['visual_change']['percent'] for s in changed)}% of pixels changed "
                 f"(diffs: frames/{cl['id']}/NN.diff.png)"
             )
-        if cl.get("video"):
-            lines.append(f"- evidence: {cl['video']}, frames/{cl['id']}/")
+        kept = [s["frame"] for s in cl["steps"] if s.get("frame")] + ([cl["video"]] if cl.get("video") else [])
+        if kept:
+            lines.append(f"- evidence: {', '.join(kept)}")
         lines.append("")
     return "\n".join(lines)
 
 
-def drop_passing_evidence(run_dir: Path, report: dict) -> None:
-    """Delete screenshots and video of PASSed claims; the contact sheet already shows them.
+def frames_to_keep(claim: dict) -> set[int]:
+    """Step numbers whose frame the agent needs: for a FAIL, the failing step and the one before it
+    (or the last step, when it failed for another reason, e.g. an HTTP 500); plus any step that looks
+    different from the baseline. A PASS needs none: the contact sheet already shows it."""
+    framed = [s for s in claim["steps"] if s.get("frame")]
+    keep = {s["n"] for s in framed if s.get("visual_change")}
+    if claim["status"] == "FAIL" and framed:
+        bad = next((i for i, s in enumerate(framed) if not s["ok"]), len(framed) - 1)
+        keep |= {s["n"] for s in framed[max(bad - 1, 0) : bad + 1]}
+    return keep
 
-    FAIL evidence, and the frames of claims that look different from the baseline, stay so the
-    agent can inspect them.
-    """
+
+def prune_evidence(run_dir: Path, report: dict) -> None:
+    """Delete every frame the agent won't need (see frames_to_keep), and any video."""
     for c in report["claims"]:
-        if c["status"] != "PASS" or any(s.get("visual_change") for s in c["steps"]):
-            continue
-        shutil.rmtree(run_dir / "frames" / c["id"], ignore_errors=True)
+        keep = frames_to_keep(c)
+        dropped = [s for s in c["steps"] if s.get("frame") and s["n"] not in keep]
+        for s in dropped:
+            (run_dir / s.pop("frame")).unlink(missing_ok=True)
+        if not keep:
+            shutil.rmtree(run_dir / "frames" / c["id"], ignore_errors=True)
         if c.get("video"):
             (run_dir / c["video"]).unlink(missing_ok=True)
             c["video"] = None
-        for s in c["steps"]:
-            s.pop("frame", None)
-        c["evidence"] = "deleted after passing (run with --keep-evidence to keep it)"
+        if dropped:
+            c["evidence"] = "only failing and changed steps keep their frames (run with --keep-evidence to keep all)"
     for d in ("frames", "videos"):
-        with contextlib.suppress(OSError):  # only removed when nothing failed
+        with contextlib.suppress(OSError):  # only removed when empty
             (run_dir / d).rmdir()
 
 
 def write(run_dir: Path, report: dict, keep_evidence: bool = False, compare: bool = False, save: bool = False) -> str:
-    # Everything that reads frames comes before the passing claims' frames are dropped.
+    # Everything that reads frames comes before the unneeded frames are deleted.
     if compare:
         compare_baseline(run_dir, report)
     contact_sheet(run_dir, report)
     if save:
         save_baseline(run_dir, report)
     if not keep_evidence:
-        drop_passing_evidence(run_dir, report)
+        prune_evidence(run_dir, report)
     (run_dir / "report.json").write_text(json.dumps(report, indent=2))
     md = to_markdown(report)
     (run_dir / "report.md").write_text(md)

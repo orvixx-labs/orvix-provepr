@@ -90,13 +90,14 @@ async def run_proof(
     plan_path: path to the plan YAML (relative to the project root, default .provepr/plan.yaml).
     base_url: overrides the plan's base_url, e.g. http://localhost:3000.
     claims: only run these claim ids (default: all). Run everything once before finishing.
-    keep_evidence: keep screenshots and video of passing claims too (by default only failures keep them).
+    keep_evidence: keep every screenshot and record video (by default only the frames of failing and
+    visually changed steps are kept, and no video is recorded).
     compare: report screens that look different from the saved baseline (see save_baseline).
     save_baseline: save this run's screens as the baseline. Do this on the base branch, before your change.
     """
     with anticipated():
         # Playwright's sync API cannot run on the event loop thread.
-        run_dir, rep = await asyncio.to_thread(runner.run_plan, Path(plan_path), base_url, claims)
+        run_dir, rep = await asyncio.to_thread(runner.run_plan, Path(plan_path), base_url, claims, keep_evidence)
     md = report.write(run_dir, rep, keep_evidence, compare, save_baseline)
     return [md, png(run_dir / "contact.png", width=1280)]
 
@@ -131,9 +132,13 @@ async def get_frames(
     claim = next((c for c in rep["claims"] if c["id"] == claim_id), None)
     if claim is None:
         raise ToolError(f"no claim '{claim_id}'; claims: {[c['id'] for c in rep['claims']]}")
-    if claim.get("evidence"):
-        return [f"claim '{claim_id}' passed; its screenshots were {claim['evidence']}. See the contact sheet."]
     recs = [s for s in claim["steps"] if s.get("frame")]
+    if not recs or (steps and not {s["n"] for s in recs} & set(steps)):
+        kept = [s["n"] for s in recs]
+        why = claim.get("evidence") or "no step of this claim takes a screenshot"
+        return [
+            f"no frames for claim '{claim_id}'{f' (kept: steps {kept})' if kept else ''}: {why}. See the contact sheet."
+        ]
     if steps:
         recs = [s for s in recs if s["n"] in steps]
     else:

@@ -183,7 +183,7 @@ def needs_browser(claim: dict) -> bool:
     return any(planfile.action_of(s) != "cmd" for s in claim.get("steps") or [])
 
 
-def run_claim(browser, base_url: str | None, claim: dict, out: Path, root: Path) -> dict:
+def run_claim(browser, base_url: str | None, claim: dict, out: Path, root: Path, video: bool = False) -> dict:
     cid = claim["id"]
     steps = claim.get("steps") or []
     result = {
@@ -204,9 +204,8 @@ def run_claim(browser, base_url: str | None, claim: dict, out: Path, root: Path)
     mocked = []  # requests a mock step answered or failed on purpose; they don't count against the app
     page = None
     if needs_browser(claim):
-        ctx = browser.new_context(
-            viewport=VIEWPORT, record_video_dir=str(out / "videos" / "_tmp"), record_video_size=VIEWPORT
-        )
+        recording = {"record_video_dir": str(out / "videos" / "_tmp"), "record_video_size": VIEWPORT} if video else {}
+        ctx = browser.new_context(viewport=VIEWPORT, **recording)
         page = ctx.new_page()
         page.on("console", lambda m: m.type == "error" and result["console_errors"].append(m.text[:300]))
         page.on("pageerror", lambda e: result["page_errors"].append(str(e)[:300]))
@@ -258,12 +257,12 @@ def run_claim(browser, base_url: str | None, claim: dict, out: Path, root: Path)
         if not rec["ok"]:
             break
 
-    video = page and page.video
+    recorded = page and page.video
     if page:
         ctx.close()
-    if video:
+    if recorded:
         dest = out / "videos" / f"{cid}.webm"
-        shutil.move(video.path(), dest)
+        shutil.move(recorded.path(), dest)
         result["video"] = str(dest.relative_to(out))
 
     reasons = [f"step {s['n']} failed: {s['error']}" for s in result["steps"] if not s["ok"]]
@@ -314,8 +313,13 @@ def prune_old_runs(runs: Path, keep: int = KEEP_RUNS) -> None:
             shutil.rmtree(old, ignore_errors=True)
 
 
-def run_plan(plan_path: Path, base_url: str | None = None, only: list[str] | None = None) -> tuple[Path, dict]:
-    """Run the plan's claims (all, or just the ids in `only`). Returns (run_dir, report)."""
+def run_plan(
+    plan_path: Path, base_url: str | None = None, only: list[str] | None = None, video: bool = False
+) -> tuple[Path, dict]:
+    """Run the plan's claims (all, or just the ids in `only`). Returns (run_dir, report).
+
+    video: record a .webm per claim. Off by default: agents read frames, not video.
+    """
     plan_path = plan_path.resolve()
     plan = planfile.load(plan_path, base_url)
     base_url = base_url or os.environ.get("PROVEPR_BASE_URL") or plan.get("base_url")
@@ -353,7 +357,7 @@ def run_plan(plan_path: Path, base_url: str | None = None, only: list[str] | Non
         if any(needs_browser(c) for c in claims_to_run):
             with sync_playwright() as pw:
                 browser = launch(pw)
-                claims = [run_claim(browser, base_url, c, out, root) for c in claims_to_run]
+                claims = [run_claim(browser, base_url, c, out, root, video) for c in claims_to_run]
                 browser.close()
         else:
             claims = [run_claim(None, base_url, c, out, root) for c in claims_to_run]
