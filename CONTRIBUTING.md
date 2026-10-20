@@ -14,7 +14,8 @@ uv run playwright install chromium
 
 ```
 uv run pytest                                  # demo app (bug caught, fix passes), http/mock/cmd steps,
-                                               # visual baseline, check (incl. --base), init
+                                               # visual baseline, check (incl. --base), init,
+                                               # setup/login, secrets, viewport
 uv run ruff check . && uv run ruff format .
 claude plugin validate .                       # if you touched .claude-plugin/, .codex-plugin/ or .mcp.json
 ```
@@ -42,6 +43,7 @@ Releases go to PyPI as [`orvix-provepr`](https://pypi.org/project/orvix-provepr/
 | `skills/provepr/SKILL.md` | thin pointer to the guide, for plugin installs |
 | `.claude-plugin/`, `.codex-plugin/`, `.mcp.json` | plugin manifests for Claude Code and Codex |
 | `examples/demo_app/` | stdlib app with a planted bug, used by the tests |
+| `tests/login_app/` | stdlib app behind a login, for `setup`, `before_each`, `${NAME}` secrets, `viewport` and the newer steps |
 
 ## Ground rules
 

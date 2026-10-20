@@ -31,6 +31,23 @@ $ provepr run
 In that run the page showed "Saved" while the server returned a 500, so the bug would have shipped.
 With provepr set up, Claude Code found and fixed it by itself (see [What it caught](#what-it-caught)).
 
+![provepr catching a broken save, then passing after the fix](docs/demo.gif)
+
+**What makes it different:**
+
+- **The agent can't quietly weaken its own proof.** `provepr check --base main` fails a PR that deletes a
+  claim or loosens one of its checks, unless the plan says why under `waivers:`, in the diff for a human to see.
+- **The proof stays.** Claims are committed in `.provepr/plan.yaml`, so they grow into a regression suite
+  that CI re-runs on every PR, with no LLM and no test code to maintain.
+- **It's cheap for the agent.** It reads a report of about 250 tokens and one image, not a browser
+  session, so rerunning everything after a fix takes 2 turns
+  ([benchmark](https://github.com/orvixx-labs/orvix-provepr/blob/main/bench/RESULTS.md)).
+- **It tests the failure path.** `mock` steps fake a 500, a dropped network or a slow API, so "shows an
+  error when saving fails" gets run, not just read.
+
+Free and MIT licensed. It's early, and [feedback](https://github.com/orvixx-labs/orvix-provepr/discussions)
+(especially what's missing or what would stop you using it) is the most useful thing you can give.
+
 ## Quick start
 
 ```
@@ -171,13 +188,41 @@ claims:
       - click: { role: button, name: Save }
       - expect_text: Could not save
 
+  - id: mobile-menu
+    says: "On a phone, the menu opens from the hamburger button"
+    viewport: mobile
+    steps:
+      - goto: /
+      - click: { role: button, name: Menu }
+      - expect_visible: { role: link, name: Settings }
+
   - id: cli-export
     says: "`mytool export` writes the profile as JSON"
     steps:
       - cmd: { run: mytool export --json, expect_output: '"name"' }
 ```
 
-The full step and locator reference is in the guide: run `provepr docs`, or read
+Most apps need a signed-in user. Sign in once in `setup`, and every claim starts signed in. Secrets come
+from the environment as `${NAME}`, so they never end up in the committed plan, and their values are
+replaced with `***` in the report. `before_each` resets data before every claim:
+
+```yaml
+setup:
+  - goto: /login
+  - fill: { label: Email, value: test@example.com }
+  - fill: { label: Password, value: "${TEST_PASSWORD}" }
+  - click: { role: button, name: Sign in }
+  - expect_url: /dashboard
+
+before_each:
+  - cmd: { run: npm run db:reset }
+```
+
+A claim with `fresh: true` skips the sign-in, e.g. to check what signed-out visitors see.
+
+Steps: `goto`, `click`, `fill`, `select`, `press`, `hover`, `check`, `uncheck`, `upload`, `reload`, `wait`,
+`expect_text`, `expect_no_text`, `expect_visible`, `expect_value`, `expect_count`, `expect_url`, plus
+`http`, `mock` and `cmd`. The full step and locator reference is in the guide: run `provepr docs`, or read
 [`src/provepr/docs/guide.md`](https://github.com/orvixx-labs/orvix-provepr/blob/main/src/provepr/docs/guide.md).
 
 ### MCP tools
@@ -263,6 +308,22 @@ Run the demo yourself:
 cd examples/demo_app && uv run --project ../.. provepr run
 ```
 
+## Why not just have the agent write Playwright tests?
+
+You can, and for a big end-to-end suite you probably should. provepr is for the moment before that:
+checking what *this* change claims, inside the agent's loop.
+
+- **No test code to maintain.** A claim is a few lines of YAML that read like the PR description. There
+  are no page objects, fixtures, async code or test runner config for the agent to get wrong.
+- **Made for an agent to read.** A failing Playwright test prints a long trace. provepr returns which claim
+  failed, the failing step, the HTTP 5xx behind it and two screenshots, in about 250 tokens.
+- **It catches failures the steps didn't ask about.** A claim FAILs on any HTTP 5xx, uncaught page error
+  or failed request, even if every step passed. In the demo the page said "Saved" and the server returned 500.
+- **The agent can't edit its way to green.** `provepr check --base` fails a PR that removes or loosens a
+  check without a written waiver. Agents writing their own test files can quietly weaken them.
+
+If you outgrow it, the plan doubles as a written spec for the Playwright tests you write later.
+
 ## How it differs from other tools
 
 - **Screen recorders for agents** capture what the agent did so a human can review it later. provepr checks
@@ -273,6 +334,8 @@ cd examples/demo_app && uv run --project ../.. provepr run
 ## Limits
 
 - Web apps and command-line tools. Background jobs, email and native GUIs are UNVERIFIED.
+- No steps yet for iframes, multiple tabs or pop-up windows, or drag and drop.
+- Chromium only. Secrets are redacted in the report, but not in screenshots (password fields show dots).
 - `check --base` compares checks exactly. It can't tell whether changing a non-check step (e.g. which
   page a `goto` opens) made a claim weaker; the plan diff in the PR shows that.
 - The screenshot diff needs two local runs (base branch, then yours) and is not part of the CI template,
@@ -289,6 +352,8 @@ cd examples/demo_app && uv run --project ../.. provepr run
 - [x] `provepr check --base main`: flag claims removed or weakened compared to the base branch
 - [x] Screenshot diff against the base branch (`--save-baseline`, `--compare`)
 - [x] Terminal and CLI apps (`cmd`)
+- [x] Sign in once (`setup`), clean data per claim (`before_each`), secrets from the environment (`${NAME}`)
+- [x] Phone screens (`viewport: mobile`), `hover`, `check`, `upload`, `expect_count`
 - [ ] GitHub App: run on every PR against its preview deployment (Vercel, Netlify) and post a PR comment
 
 ## Contributing
