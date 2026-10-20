@@ -1,0 +1,53 @@
+base_url: http://127.0.0.1:8766
+start: python3 server.py
+
+setup:   # signs in once; every claim starts signed in
+  - goto: /login
+  - fill: { label: Email, value: ada@example.com }
+  - fill: { label: Password, value: "${LOGIN_PASSWORD}" }
+  - click: { role: button, name: Sign in }
+  - expect_url: /account
+
+before_each:   # every claim starts from the same data
+  - http: { method: POST, path: /api/reset }
+
+claims:
+  - id: signed-in
+    says: "A signed-in user sees their account, and the data was reset before the claim"
+    steps:
+      - goto: /account
+      - expect_text: "Visits: 1"
+      - expect_count: { css: li.item, count: 3 }
+
+  - id: reset-again
+    says: "before_each runs before every claim, not once"
+    steps:
+      - goto: /account
+      - expect_text: "Visits: 1"
+
+  - id: logged-out
+    says: "A visitor who is not signed in is sent to the sign-in page"
+    fresh: true
+    steps:
+      - goto: /account
+      - expect_url: /login
+
+  - id: widgets
+    says: "The checkbox, help tooltip and avatar picker work"
+    steps:
+      - goto: /account
+      - check: { label: Email me updates }
+      - expect_text: Subscribed
+      - uncheck: { label: Email me updates }
+      - expect_text: Unsubscribed
+      - hover: { role: button, name: Help }
+      - expect_visible: { text: We never share your email }
+      - upload: { label: Avatar, file: fixtures/avatar.txt }
+      - expect_text: "Selected: avatar.txt"
+
+  - id: mobile
+    says: "On a phone the mobile layout shows"
+    viewport: mobile
+    steps:
+      - goto: /account
+      - expect_visible: { text: Mobile layout }

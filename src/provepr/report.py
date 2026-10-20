@@ -132,8 +132,10 @@ def to_markdown(report: dict) -> str:
             if b
             else "No baseline to compare with: run `provepr run --save-baseline` on the base branch first"
         )
+    if (setup := report.get("setup")) and setup["status"] == "PASS":
+        lines.append(f"setup: {len(setup['steps'])}/{len(setup['steps'])} steps passed")
     lines.append("")
-    for cl in report["claims"]:
+    for cl in ([setup] if setup and setup["status"] == "FAIL" else []) + report["claims"]:
         lines.append(f"## {cl['status']} `{cl['id']}`: {cl['says']}")
         if cl["steps"]:
             ok = sum(s["ok"] for s in cl["steps"])
@@ -141,7 +143,8 @@ def to_markdown(report: dict) -> str:
         for s in cl["steps"]:
             if not s["ok"]:
                 lines.append(f"- FAILED step {s['n']} `{step_label(s['step'])}`: {s['error']}")
-        lines += [f"- {r}" for r in cl["reasons"] if not r.startswith("step ")][:MAX_LISTED]
+        failed_step = ("step ", "setup step ")  # already listed as FAILED step lines above
+        lines += [f"- {r}" for r in cl["reasons"] if not r.startswith(failed_step)][:MAX_LISTED]
         if cl.get("note"):
             lines.append(f"- {cl['note']}")
         lines += [f"- console error: {e}" for e in dict.fromkeys(cl["console_errors"])][:MAX_LISTED]
@@ -177,7 +180,7 @@ def frames_to_keep(claim: dict) -> set[int]:
 
 def prune_evidence(run_dir: Path, report: dict) -> None:
     """Delete every frame the agent won't need (see frames_to_keep), and any video."""
-    for c in report["claims"]:
+    for c in ([report["setup"]] if report.get("setup") else []) + report["claims"]:
         keep = frames_to_keep(c)
         dropped = [s for s in c["steps"] if s.get("frame") and s["n"] not in keep]
         for s in dropped:

@@ -122,6 +122,8 @@ async def get_frames(
 ) -> list:
     """Return screenshots for one claim. One frame is taken after every step (a terminal view for cmd steps).
 
+    claim_id: a claim's id, or `_setup` for the plan's setup steps.
+
     steps: step numbers to fetch. Default: the failing step and the one before it; else the steps that
     look different from the baseline; else the last step. A step that looks different also returns its
     diff image (changed pixels in red).
@@ -129,9 +131,10 @@ async def get_frames(
     with anticipated():
         run_dir = find_run(plan_path, run)
     rep = json.loads((run_dir / "report.json").read_text())
-    claim = next((c for c in rep["claims"] if c["id"] == claim_id), None)
+    claims = rep["claims"] + ([rep["setup"]] if rep.get("setup") else [])
+    claim = next((c for c in claims if c["id"] == claim_id), None)
     if claim is None:
-        raise ToolError(f"no claim '{claim_id}'; claims: {[c['id'] for c in rep['claims']]}")
+        raise ToolError(f"no claim '{claim_id}'; claims: {[c['id'] for c in claims]}")
     recs = [s for s in claim["steps"] if s.get("frame")]
     if not recs or (steps and not {s["n"] for s in recs} & set(steps)):
         kept = [s["n"] for s in recs]

@@ -66,6 +66,9 @@ jobs:
         run: uvx --from "INSTALL_SPEC" provepr check --base "origin/$GITHUB_BASE_REF"
       - name: Run the claims
         run: uvx --from "INSTALL_SPEC" provepr run
+        # If the plan reads ${NAME} values (e.g. a test login), add them as repository secrets and pass them:
+        # env:
+        #   LOGIN_PASSWORD: ${{ secrets.LOGIN_PASSWORD }}
       - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@v4

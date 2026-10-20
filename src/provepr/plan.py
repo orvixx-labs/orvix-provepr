@@ -17,6 +17,11 @@ KEYED = {
 NUMBERS = {"expect_status", "status", "delay", "expect_exit", "timeout"}  # option keys that take a number
 CHECKS = {"http", "cmd"}  # steps that check something besides expect_*
 ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")  # ids become file names
+ENV_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")  # ${NAME}: read from the environment at run time
+VIEWPORTS = {
+    "desktop": {"viewport": {"width": 1280, "height": 720}},
+    "mobile": {"viewport": {"width": 390, "height": 844}, "is_mobile": True, "has_touch": True},
+}
 
 # step -> argument kind
 STEPS = {
@@ -25,10 +30,15 @@ STEPS = {
     "wait": "int",
     "press": "text",
     "click": "locator",
+    "hover": "locator",
+    "check": "locator",
+    "uncheck": "locator",
+    "upload": "locator+file",
     "expect_visible": "locator",
     "fill": "locator+value",
     "select": "locator+value",
     "expect_value": "locator+value",
+    "expect_count": "locator+count",
     "expect_text": "text",
     "expect_no_text": "text",
     "expect_url": "text",
@@ -62,6 +72,14 @@ def step_problem(step) -> str | None:
             return f"'{action}' needs a locator with one of {', '.join(LOCATOR_KEYS)}, got {arg!r}"
         if kind == "locator+value" and "value" not in arg:
             return f"'{action}' needs a 'value'"
+        if kind == "locator+file" and not (
+            isinstance(arg.get("file"), str) or (isinstance(arg.get("file"), list) and arg["file"])
+        ):
+            return f"'{action}' needs a 'file': a path from the project root, or a list of them"
+        if kind == "locator+count" and (
+            not isinstance(arg.get("count"), int) or isinstance(arg["count"], bool) or arg["count"] < 0
+        ):
+            return f"'{action}' needs a 'count' (a whole number)"
     if kind == "keyed":
         need, allowed = KEYED[action]
         if not isinstance(arg, dict) or need not in arg:
@@ -82,6 +100,44 @@ def step_problem(step) -> str | None:
     return None
 
 
+def viewport_problem(value) -> str | None:
+    if value is None or (isinstance(value, str) and value in VIEWPORTS):
+        return None
+    sizes = value.values() if isinstance(value, dict) and set(value) == {"width", "height"} else [None]
+    if all(isinstance(v, int) and not isinstance(v, bool) and 100 <= v <= 4000 for v in sizes):
+        return None
+    return f"'viewport' must be {' or '.join(VIEWPORTS)}, or {{width: 390, height: 844}}, got {value!r}"
+
+
+def context_options(value) -> dict:
+    """Browser context options for a validated viewport value."""
+    if isinstance(value, dict):
+        return {"viewport": dict(value)}
+    return VIEWPORTS[value or "desktop"]
+
+
+def env_names(obj) -> set[str]:
+    """Every ${NAME} the plan reads from the environment."""
+    if isinstance(obj, str):
+        return set(ENV_RE.findall(obj))
+    if isinstance(obj, dict):
+        return set().union(*(env_names(v) for v in obj.values()))
+    if isinstance(obj, list):
+        return set().union(*(env_names(v) for v in obj))
+    return set()
+
+
+def expand(obj, env=os.environ):
+    """Replace ${NAME} with its environment value, everywhere in obj. Missing names are left as they are."""
+    if isinstance(obj, str):
+        return ENV_RE.sub(lambda m: env.get(m[1], m[0]), obj)
+    if isinstance(obj, dict):
+        return {k: expand(v, env) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [expand(v, env) for v in obj]
+    return obj
+
+
 def validate(plan, base_url: str | None = None) -> list[str]:
     """Every problem in the plan, as human-readable lines. Empty means valid."""
     if not isinstance(plan, dict):
@@ -90,10 +146,25 @@ def validate(plan, base_url: str | None = None) -> list[str]:
     claims = plan.get("claims")
     if not isinstance(claims, list) or not claims:
         return ["'claims' must be a non-empty list"]
+    shared = {}  # setup and before_each: steps outside any claim
+    for key in ("setup", "before_each"):
+        steps = plan.get(key)
+        if steps is None:
+            continue
+        if not isinstance(steps, list) or not steps:
+            problems.append(f"'{key}' must be a non-empty list of steps")
+            continue
+        shared[key] = steps
+        for n, step in enumerate(steps, 1):
+            if p := step_problem(step):
+                problems.append(f"{key} step {n}: {p}")
     all_steps = [s for c in claims if isinstance(c, dict) and isinstance(c.get("steps"), list) for s in c["steps"]]
+    all_steps += [s for steps in shared.values() for s in steps]
     needs_url = any(action_of(s) != "cmd" for s in all_steps)  # only cmd steps run without the app's URL
     if needs_url and not (base_url or plan.get("base_url") or os.environ.get("PROVEPR_BASE_URL")):
         problems.append("missing 'base_url' (or pass --base-url, or set PROVEPR_BASE_URL)")
+    if p := viewport_problem(plan.get("viewport")):
+        problems.append(p)
     parallel = plan.get("parallel", 1)
     if not isinstance(parallel, int) or isinstance(parallel, bool) or not 1 <= parallel <= 16:
         problems.append(f"'parallel' must be a whole number of workers from 1 to 16, got {parallel!r}")
@@ -114,6 +185,10 @@ def validate(plan, base_url: str | None = None) -> list[str]:
         seen.add(cid)
         if not c.get("says"):
             problems.append(f"{where}: missing 'says' (what the change claims, in one sentence)")
+        if p := viewport_problem(c.get("viewport")):
+            problems.append(f"{where}: {p}")
+        if "fresh" in c and not isinstance(c["fresh"], bool):
+            problems.append(f"{where}: 'fresh' must be true or false")
         steps = c.get("steps") or []
         if not isinstance(steps, list):
             problems.append(f"{where}: 'steps' must be a list")

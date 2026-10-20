@@ -51,6 +51,16 @@ start: npm run dev                # command that starts the app, run from the pr
 start_timeout: 30                 # seconds to wait for base_url to answer (default 30)
 parallel: 4                       # optional: run claims on 4 browsers at once (default 1). Only for claims
                                   # that don't depend on each other's data; see "Speed" below.
+viewport: desktop                 # optional: desktop (1280×720, default), mobile (390×844 phone), or
+                                  # { width: 1024, height: 768 }. A claim can set its own.
+setup:                            # optional: steps run ONCE before the claims, e.g. signing in. Every
+  - goto: /login                  # claim starts with the cookies and storage the setup left.
+  - fill: { label: Email, value: test@example.com }
+  - fill: { label: Password, value: "${TEST_PASSWORD}" }   # ${NAME} is read from the environment
+  - click: { role: button, name: Sign in }
+  - expect_url: /dashboard
+before_each:                      # optional: steps run at the start of EVERY claim, e.g. resetting data
+  - cmd: { run: npm run db:reset }
 waivers:                          # optional: claims you weakened or removed ON PURPOSE, with the reason.
   old-export: "CSV export was removed in this PR"   # only a new or reworded waiver counts
 
@@ -70,13 +80,20 @@ claims:
     steps:
       - http: { method: POST, path: /api/profile, json: { name: "xxxxxxxxxx...101 chars" }, expect_status: 400 }
 
+  - id: signed-out-redirect
+    says: "A visitor who is not signed in is sent to the sign-in page"
+    fresh: true                   # skip the setup's sign-in: start with no cookies
+    steps:
+      - goto: /dashboard
+      - expect_url: /login
+
   - id: email-digest
     says: "A weekly digest email is sent on Mondays"
     # no steps: not checkable here, reported UNVERIFIED (say so honestly)
 ```
 
-Each claim runs in a fresh browser (no shared cookies or storage) at 1280×720. Steps run in order, and
-the first failing step stops the claim. Every action and expectation times out after 5 seconds, but an
+Each claim runs in a fresh browser at 1280×720 (or its `viewport`), starting with only what `setup` left.
+Steps run in order, and the first failing step stops the claim. Every action and expectation times out after 5 seconds, but an
 expectation stops waiting as soon as the claim has already failed for another reason (an HTTP 5xx, a page
 error or a failed request), so a broken save doesn't cost 5 seconds per later step.
 A plan whose steps are all `cmd` steps (a CLI tool) needs no `base_url`, and starts no browser.
@@ -89,6 +106,9 @@ A plan whose steps are all `cmd` steps (a CLI tool) needs no `base_url`, and sta
 | `reload` | `true` | Reloads the page |
 | `wait` | milliseconds | Sleeps. Prefer an `expect_*` step, which waits only as long as needed |
 | `click` | locator | Clicks the element |
+| `hover` | locator | Moves the mouse over the element, e.g. to open a tooltip or menu |
+| `check` / `uncheck` | locator | Ticks or clears a checkbox or radio button |
+| `upload` | locator + `file` | Picks a file (or a list of files) in a file input. Paths are from the project root |
 | `fill` | locator + `value` | Replaces the input's text |
 | `select` | locator + `value` | Picks an `<option>` by value or label |
 | `press` | key | Presses a key, e.g. `Enter`, `Control+A` |
@@ -96,10 +116,32 @@ A plan whose steps are all `cmd` steps (a CLI tool) needs no `base_url`, and sta
 | `expect_no_text` | text | The page does not contain the text |
 | `expect_visible` | locator | The element is visible |
 | `expect_value` | locator + `value` | The input's current value equals `value` |
+| `expect_count` | locator + `count` | Exactly `count` elements match, e.g. `{ css: "li.todo", count: 3 }` |
 | `expect_url` | text | The URL contains the text |
 | `http` | see below | Calls the app's API and checks the response |
 | `mock` | see below | Fakes, fails or delays the page's matching requests, to reach error and loading states |
 | `cmd` | see below | Runs a shell command and checks its exit code and output |
+
+### Signing in, clean data and secrets
+
+Most apps need a signed-in user. Put the sign-in in `setup` (see the plan above) instead of repeating it
+in every claim: it runs once per run, and every claim starts with the cookies and local storage it left.
+It can be browser steps, or an `http` step that calls the login API, or a `cmd` step that creates a test
+user. If a setup step fails, the report shows `FAIL _setup` with the failing step (`get_frames("_setup")`
+for screenshots), and every claim that depends on it FAILs without running. Mark a claim `fresh: true` to
+start it without the setup's state, e.g. to check what signed-out visitors see, or the sign-in page itself.
+
+`before_each` steps run at the start of every claim, after the setup, in the claim's own browser. Use
+them to reset or seed data so claims don't depend on each other's order (a `cmd` step running your reset
+script, or an `http` call to a test-only reset endpoint). They take no screenshots; if one fails, the
+claim FAILs with `before_each step N failed` and its own steps don't run.
+
+**Never write a password, token or API key into the plan: it is committed.** Write `${NAME}` instead and
+set the environment variable `NAME` where provepr runs (in CI, a repository secret passed with `env:`).
+`${NAME}` works in any step value and in `base_url`; in a `cmd` step's `run`, the shell expands it. A run
+stops before starting if a variable the plan uses is not set. Values of 4 or more characters are
+replaced with `***` everywhere in `report.md` and `report.json` (errors, notes and command output).
+Screenshots are not redacted: password fields show dots, but don't `expect_text` a secret.
 
 ### The `http` step
 
@@ -172,7 +214,7 @@ Use the first that fits. Role and label locators survive markup changes, and the
 
 | Status | When |
 |---|---|
-| **FAIL** | a step failed (for `cmd`: wrong exit code, missing output or timeout), an uncaught page error occurred, a page request returned HTTP 5xx, or a request failed at the network level (requests a `mock` step answered or failed are left out) |
+| **FAIL** | a step failed (for `cmd`: wrong exit code, missing output or timeout), the `setup` or a `before_each` step failed, an uncaught page error occurred, a page request returned HTTP 5xx, or a request failed at the network level (requests a `mock` step answered or failed are left out) |
 | **PASS** | every step passed and none of the above happened |
 | **UNVERIFIED** | the claim has no steps |
 
@@ -216,6 +258,9 @@ ones as bugs, and mention intended ones in the PR. Dynamic content (times, rando
 - When a claim is about saved data, check it **after** a `reload` or navigation. A success message is not proof.
 - Check the failure path as well as the happy path: bad input should show an error, not a success message.
   Use `mock` to make the server or network fail and check what the page then says.
+- If the change looks different on a phone, add a claim with `viewport: mobile`. A page without
+  `<meta name="viewport" content="width=device-width">` renders at desktop width on a phone, as it would
+  for real users.
 - Prefer checks a user would notice (text, values, URLs, status codes) over implementation details.
 
 ## Commands and tools

@@ -9,6 +9,7 @@ import threading
 import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -21,7 +22,7 @@ from provepr import plan as planfile
 STEP_TIMEOUT_MS = 5000
 SLICE_MS = 250  # expectations retry in slices this long, so a claim that already failed stops waiting
 CMD_TIMEOUT_S = 30
-VIEWPORT = {"width": 1280, "height": 720}
+VIEWPORT = {"width": 1280, "height": 720}  # terminal frames for cmd steps
 KEEP_RUNS = 5  # older run folders are deleted when a new run starts
 
 
@@ -166,10 +167,19 @@ def patiently(check, failed) -> None:
                 raise AssertionError(f"stopped waiting, the claim already failed ({reasons[0]}): {e}") from e
 
 
-def do_step(page, base_url: str, step: dict, mocked: list, failed=list) -> str | None:
+def upload_files(root: Path, arg: dict) -> list[str]:
+    names = arg["file"] if isinstance(arg["file"], list) else [arg["file"]]
+    paths = [root / str(n) for n in names]
+    if missing := [str(n) for n, path in zip(names, paths, strict=True) if not path.is_file()]:
+        raise ValueError(f"no such file to upload: {', '.join(missing)} (paths are from the project root)")
+    return [str(path) for path in paths]
+
+
+def do_step(page, base_url: str, step: dict, mocked: list, failed=list, root: Path = Path(".")) -> str | None:
     """Execute one (already validated) browser or http step. Returns an optional note; raises on failure.
 
     failed: returns the claim's failure reasons so far; expectations stop waiting once there are any.
+    root: the project root, which `upload` paths are relative to.
     """
     ((action, arg),) = step.items()
     t = STEP_TIMEOUT_MS
@@ -186,6 +196,14 @@ def do_step(page, base_url: str, step: dict, mocked: list, failed=list) -> str |
             page.wait_for_timeout(int(arg))
         case "click":
             locate(page, arg).click(timeout=t)
+        case "hover":
+            locate(page, arg).hover(timeout=t)
+        case "check":
+            locate(page, arg).check(timeout=t)
+        case "uncheck":
+            locate(page, arg).uncheck(timeout=t)
+        case "upload":
+            locate(page, arg).set_input_files(upload_files(root, arg), timeout=t)
         case "fill":
             locate(page, arg).fill(str(arg["value"]), timeout=t)
         case "select":
@@ -200,6 +218,8 @@ def do_step(page, base_url: str, step: dict, mocked: list, failed=list) -> str |
             patiently(lambda ms: expect(locate(page, arg).first).to_be_visible(timeout=ms), failed)
         case "expect_value":
             patiently(lambda ms: expect(locate(page, arg)).to_have_value(str(arg["value"]), timeout=ms), failed)
+        case "expect_count":
+            patiently(lambda ms: expect(locate(page, arg)).to_have_count(arg["count"], timeout=ms), failed)
         case "expect_url":
             page.wait_for_url(f"**{arg}**", timeout=t)
         case _:
@@ -214,93 +234,157 @@ def short_error(e: Exception) -> str:
     return " | ".join(lines[:3])[:400]
 
 
-def needs_browser(claim: dict) -> bool:
-    return any(planfile.action_of(s) != "cmd" for s in claim.get("steps") or [])
+def needs_browser(steps: list) -> bool:
+    return any(planfile.action_of(s) != "cmd" for s in steps)
 
 
-def run_claim(browser, base_url: str | None, claim: dict, out: Path, root: Path, video: bool = False) -> dict:
-    cid = claim["id"]
-    steps = claim.get("steps") or []
-    result = {
-        "id": cid,
-        "says": claim.get("says", ""),
-        "steps": [],
-        "console_errors": [],
-        "page_errors": [],
-        "network_errors": [],
-        "video": None,
-    }
-    if not steps:
-        result.update(status="UNVERIFIED", reasons=["no steps, so nothing was checked"])
-        return result
+@dataclass
+class Settings:
+    """What every claim in a run shares."""
 
-    frames = out / "frames" / cid
-    frames.mkdir(parents=True)
-    mocked = []  # requests a mock step answered or failed on purpose; they don't count against the app
-    page = None
-    if needs_browser(claim):
-        recording = {"record_video_dir": str(out / "videos" / "_tmp"), "record_video_size": VIEWPORT} if video else {}
-        ctx = browser.new_context(viewport=VIEWPORT, **recording)
-        page = ctx.new_page()
-        page.on("console", lambda m: m.type == "error" and result["console_errors"].append(m.text[:300]))
-        page.on("pageerror", lambda e: result["page_errors"].append(str(e)[:300]))
-        page.on(
-            "response",
-            lambda r: (
-                r.status >= 400
-                and r.request not in mocked
-                and result["network_errors"].append({"method": r.request.method, "url": r.url, "status": r.status})
-            ),
-        )
-        page.on(
-            "requestfailed",
-            lambda r: (
-                "ERR_ABORTED" not in (r.failure or "")
-                and r not in mocked
-                and result["network_errors"].append(
-                    {"method": r.method, "url": r.url, "status": None, "failure": r.failure}
-                )
-            ),
-        )
+    base_url: str | None
+    out: Path
+    root: Path
+    video: bool = False
+    viewport: object = None  # the plan's default; a claim can override it
+    before_each: list = field(default_factory=list)
+    setup: dict | None = None  # the setup result, if the plan has one
+    state: dict | None = None  # cookies and storage the setup left, given to every claim that isn't `fresh`
 
+
+def new_result(cid: str, says: str) -> dict:
+    return {"id": cid, "says": says, "steps": [], "console_errors": [], "page_errors": [], "network_errors": []}
+
+
+def open_page(browser, result: dict, mocked: list, options: dict, state=None, video_dir: Path | None = None):
+    """A fresh browser context and page whose console, page and network errors are recorded in `result`."""
+    recording = {"record_video_dir": str(video_dir), "record_video_size": options["viewport"]} if video_dir else {}
+    ctx = browser.new_context(**options, storage_state=state, **recording)
+    page = ctx.new_page()
+    page.on("console", lambda m: m.type == "error" and result["console_errors"].append(m.text[:300]))
+    page.on("pageerror", lambda e: result["page_errors"].append(str(e)[:300]))
+    page.on(
+        "response",
+        lambda r: (
+            r.status >= 400
+            and r.request not in mocked
+            and result["network_errors"].append({"method": r.request.method, "url": r.url, "status": r.status})
+        ),
+    )
+    page.on(
+        "requestfailed",
+        lambda r: (
+            "ERR_ABORTED" not in (r.failure or "")
+            and r not in mocked
+            and result["network_errors"].append(
+                {"method": r.method, "url": r.url, "status": None, "failure": r.failure}
+            )
+        ),
+    )
+    return ctx, page
+
+
+def run_steps(page, steps: list, result: dict, mocked: list, s: Settings, frames: Path | None) -> list[dict]:
+    """Run steps in order until one fails. Returns a record per step that ran; `frames` gets a screenshot
+    per step (None: no screenshots)."""
+    recs = []
     for i, step in enumerate(steps, 1):
         action = planfile.action_of(step)
-        rec = {"n": i, "step": step, "ok": True}
+        rec = {"n": i, "step": step, "ok": True}  # the report shows the step as written, ${NAME} and all
+        live = planfile.expand(step)
+        if action == "cmd":
+            live["cmd"]["run"] = step["cmd"]["run"]  # the shell expands ${NAME} itself, quoting included
         start = time.monotonic()
         try:
             if action == "cmd":
-                rec["output"], problem = cmd_step(root, step["cmd"])
+                rec["output"], problem = cmd_step(s.root, live["cmd"])
                 if problem:
                     raise AssertionError(problem)
-            elif note := do_step(page, base_url, step, mocked, lambda: failure_reasons(result)):
+            elif note := do_step(page, s.base_url, live, mocked, lambda: failure_reasons(result), s.root):
                 rec["note"] = note
         except (PlaywrightError, AssertionError, ValueError, KeyError, TypeError) as e:
             rec.update(ok=False, error=short_error(e))
         rec["ms"] = round((time.monotonic() - start) * 1000)
-        frame = frames / f"{i:02d}.png"
+        frame = frames / f"{i:02d}.png" if frames else None
         try:
             if action == "cmd":
-                terminal_frame(rec["output"], frame)
-                rec["frame"] = str(frame.relative_to(out))
+                if frame:
+                    terminal_frame(rec["output"], frame)
+                    rec["frame"] = str(frame.relative_to(s.out))
                 rec["output"] = rec["output"][-4000:]
-            elif action not in ("http", "mock"):  # those change nothing on screen
+            elif frame and action not in ("http", "mock"):  # those change nothing on screen
                 page.screenshot(path=str(frame))
-                rec["frame"] = str(frame.relative_to(out))
+                rec["frame"] = str(frame.relative_to(s.out))
         except PlaywrightError:
             pass
-        result["steps"].append(rec)
+        recs.append(rec)
         if not rec["ok"]:
             break
+    return recs
+
+
+SETUP_ID = "_setup"  # claim ids can't start with "_", so its frames folder never clashes with a claim's
+
+
+def run_setup(browser, steps: list, s: Settings) -> tuple[dict, dict | None]:
+    """Run the plan's `setup` steps once. Returns (result, the browser state they left, e.g. a login)."""
+    result = new_result(SETUP_ID, "setup: runs once, before every claim")
+    frames = s.out / "frames" / SETUP_ID
+    frames.mkdir(parents=True)
+    mocked, state, ctx, page = [], None, None, None
+    if browser:
+        ctx, page = open_page(browser, result, mocked, planfile.context_options(s.viewport))
+    result["steps"] = run_steps(page, steps, result, mocked, s, frames)
+    if ctx:
+        state = ctx.storage_state()
+        ctx.close()
+    reasons = [f"setup step {x['n']} failed: {x['error']}" for x in result["steps"] if not x["ok"]]
+    reasons += failure_reasons(result)
+    result.update(status="FAIL" if reasons else "PASS", reasons=reasons)
+    return result, state
+
+
+def run_claim(browser, claim: dict, s: Settings) -> dict:
+    cid = claim["id"]
+    steps = claim.get("steps") or []
+    result = new_result(cid, claim.get("says", ""))
+    result["video"] = None
+    if not steps:
+        result.update(status="UNVERIFIED", reasons=["no steps, so nothing was checked"])
+        return result
+    fresh = claim.get("fresh", False)
+    if s.setup and s.setup["status"] == "FAIL" and not fresh:
+        result.update(status="FAIL", reasons=[f"did not run, the setup failed: {s.setup['reasons'][0]}"])
+        return result
+
+    frames = s.out / "frames" / cid
+    frames.mkdir(parents=True)
+    mocked = []  # requests a mock step answered or failed on purpose; they don't count against the app
+    ctx = page = None
+    if needs_browser(steps + s.before_each):
+        options = planfile.context_options(claim.get("viewport", s.viewport))
+        state = None if fresh else s.state
+        ctx, page = open_page(browser, result, mocked, options, state, s.out / "videos" / "_tmp" if s.video else None)
+
+    reasons = []
+    if s.before_each:
+        result["before_each"] = run_steps(page, s.before_each, result, mocked, s, frames=None)
+        reasons += [f"before_each step {x['n']} failed: {x['error']}" for x in result["before_each"] if not x["ok"]]
+    if not reasons:
+        result["steps"] = run_steps(page, steps, result, mocked, s, frames)
 
     recorded = page and page.video
-    if page:
+    if ctx:
         ctx.close()
     if recorded:
-        dest = out / "videos" / f"{cid}.webm"
-        shutil.move(recorded.path(), dest)
-        result["video"] = str(dest.relative_to(out))
+        dest = s.out / "videos" / f"{cid}.webm"
+        try:
+            shutil.move(recorded.path(), dest)
+            result["video"] = str(dest.relative_to(s.out))
+        except OSError:
+            pass  # the browser wrote no video (e.g. its ffmpeg is missing); the frames are still there
 
-    reasons = [f"step {s['n']} failed: {s['error']}" for s in result["steps"] if not s["ok"]]
+    reasons += [f"step {x['n']} failed: {x['error']}" for x in result["steps"] if not x["ok"]]
     reasons += failure_reasons(result)
     result["status"] = "FAIL" if reasons else "PASS"
     result["reasons"] = reasons
@@ -323,20 +407,29 @@ def launch(pw):
     return pw.chromium.launch()
 
 
-def run_claims(claims: list[dict], base_url, out: Path, root: Path, video: bool, workers: int) -> list[dict]:
-    """Run claims, split over `workers` threads each with its own browser, so slow claims overlap.
+def run_claims(claims: list[dict], setup: list | None, s: Settings, workers: int) -> list[dict]:
+    """Run the setup once, then the claims, split over `workers` threads each with its own browser, so slow
+    claims overlap.
 
     Turning parallel on says the claims don't share data, so a FAIL is reported as is. Its note points to
     rerunning it alone, in case two claims did clash.
     """
+    if setup:
+        with sync_playwright() as pw:
+            browser = launch(pw) if needs_browser(setup) else None
+            try:
+                s.setup, s.state = run_setup(browser, setup, s)
+            finally:
+                if browser:
+                    browser.close()
 
     def batch(chunk: list[dict]) -> list[dict]:
-        if not any(needs_browser(c) for c in chunk):
-            return [run_claim(None, base_url, c, out, root) for c in chunk]
+        if not any(needs_browser((c.get("steps") or []) + s.before_each) for c in chunk):
+            return [run_claim(None, c, s) for c in chunk]
         with sync_playwright() as pw:  # one per thread: sync Playwright objects can't cross threads
             browser = launch(pw)
             try:
-                return [run_claim(browser, base_url, c, out, root, video) for c in chunk]
+                return [run_claim(browser, c, s) for c in chunk]
             finally:
                 browser.close()
 
@@ -372,6 +465,19 @@ def prune_old_runs(runs: Path, keep: int = KEEP_RUNS) -> None:
             shutil.rmtree(old, ignore_errors=True)
 
 
+def redact(obj, secrets: list[str]):
+    """Replace every secret value in the report's text with ***."""
+    if isinstance(obj, str):
+        for secret in secrets:
+            obj = obj.replace(secret, "***")
+        return obj
+    if isinstance(obj, dict):
+        return {k: redact(v, secrets) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [redact(v, secrets) for v in obj]
+    return obj
+
+
 def run_plan(
     plan_path: Path, base_url: str | None = None, only: list[str] | None = None, video: bool = False
 ) -> tuple[Path, dict]:
@@ -390,6 +496,18 @@ def run_plan(
             raise ValueError(f"no such claim(s): {', '.join(sorted(unknown))}")
         claims_to_run = [c for c in claims_to_run if c["id"] in only]
 
+    # ${NAME} in steps comes from the environment, so secrets stay out of the committed plan.
+    shared = (plan.get("setup") or []) + (plan.get("before_each") or [])
+    secret_names = planfile.env_names([c.get("steps") or [] for c in claims_to_run] + shared)
+    if missing := sorted((secret_names | planfile.env_names(base_url)) - set(os.environ)):
+        raise ValueError(
+            "the plan reads these environment variables, but they are not set: "
+            + ", ".join(missing)
+            + " (in CI, add them as repository secrets and pass them to the provepr step with `env:`)"
+        )
+    base_url = planfile.expand(base_url)
+    secrets = sorted({os.environ[n] for n in secret_names if len(os.environ[n]) >= 4}, key=len, reverse=True)
+
     runs = plan_path.parent / "runs"
     prune_old_runs(runs, KEEP_RUNS - 1)  # leaves room for this run
     out = runs / datetime.now().strftime("%Y%m%d-%H%M%S-%f")
@@ -406,6 +524,7 @@ def run_plan(
             stderr=subprocess.STDOUT,
             start_new_session=True,
         )
+    settings = Settings(base_url, out, root, video, plan.get("viewport"), plan.get("before_each") or [])
     try:
         try:
             if base_url:  # a plan of only cmd steps may have no URL to wait for
@@ -413,7 +532,7 @@ def run_plan(
         except TimeoutError as e:
             tail = (out / "app.log").read_text()[-1500:] if server else ""
             raise TimeoutError(f"{e}\n--- app.log (tail) ---\n{tail}" if tail else str(e)) from None
-        claims = run_claims(claims_to_run, base_url, out, root, video, plan.get("parallel", 1))
+        claims = run_claims(claims_to_run, plan.get("setup"), settings, plan.get("parallel", 1))
     finally:
         if server and server.poll() is None:
             os.killpg(server.pid, signal.SIGTERM)
@@ -426,5 +545,7 @@ def run_plan(
     except OSError:  # git not installed
         head = None
     report = {"run": out.name, "base_url": base_url, "plan": str(plan_path), "commit": head, "counts": counts}
+    if settings.setup:
+        report["setup"] = settings.setup
     report["claims"] = claims
-    return out, report
+    return out, redact(report, secrets)
