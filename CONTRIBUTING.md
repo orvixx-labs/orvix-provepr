@@ -17,7 +17,7 @@ uv run pytest                                  # demo app (bug caught, fix passe
                                                # visual baseline, check (incl. --base), init,
                                                # setup/login, secrets, viewport
 uv run ruff check . && uv run ruff format .
-claude plugin validate .                       # if you touched .claude-plugin/, .codex-plugin/ or .mcp.json
+claude plugin validate .                       # if you touched .claude-plugin/, .codex-plugin/, .mcp.json or .codex-mcp.json
 ```
 
 ## Releasing
@@ -25,7 +25,8 @@ claude plugin validate .                       # if you touched .claude-plugin/,
 Releases go to PyPI as [`orvix-provepr`](https://pypi.org/project/orvix-provepr/) through
 `.github/workflows/publish.yml` (PyPI Trusted Publishing, so no API token is stored anywhere).
 
-1. Bump `version` in `pyproject.toml` and in `.claude-plugin/plugin.json` and `.codex-plugin/plugin.json`.
+1. Bump `version` in `pyproject.toml` and in `.claude-plugin/plugin.json` and `.codex-plugin/plugin.json`,
+   and the `orvix-provepr==` pin in `.codex-mcp.json` (a test checks they all match).
 2. Commit, then create a GitHub release with a matching tag, e.g. `v0.2.0`.
 3. The workflow runs the tests, builds, and publishes.
 
@@ -41,7 +42,7 @@ Releases go to PyPI as [`orvix-provepr`](https://pypi.org/project/orvix-provepr/
 | `src/provepr/init.py` | the AGENTS.md block, CLAUDE.md import, CI workflow and starter plan templates |
 | `src/provepr/docs/guide.md` | **the** guide for coding agents; everything else points here |
 | `skills/provepr/SKILL.md` | thin pointer to the guide, for plugin installs |
-| `.claude-plugin/`, `.codex-plugin/`, `.mcp.json` | plugin manifests for Claude Code and Codex |
+| `.claude-plugin/`, `.codex-plugin/`, `.mcp.json`, `.codex-mcp.json` | plugin manifests for Claude Code and Codex. Codex can't point at the plugin's own folder, so it runs the PyPI release pinned in `.codex-mcp.json` |
 | `examples/demo_app/` | stdlib app with a planted bug, used by the tests |
 | `tests/login_app/` | stdlib app behind a login, for `setup`, `before_each`, `${NAME}` secrets, `viewport` and the newer steps |
 

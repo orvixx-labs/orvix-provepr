@@ -1,6 +1,9 @@
+import json
 import subprocess
 import sys
+import tomllib
 from importlib.metadata import version
+from pathlib import Path
 
 import pytest
 import yaml
@@ -137,3 +140,11 @@ def test_init_upgrades_what_an_older_version_wrote(tmp_path):
 def test_docs_command_prints_bundled_guide():
     out = subprocess.run([sys.executable, "-m", "provepr.cli", "docs"], capture_output=True, text=True, check=True)
     assert "Never weaken the plan" in out.stdout and "`http`" in out.stdout
+
+
+def test_versions_match_for_release():
+    release = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
+    for manifest in (".claude-plugin/plugin.json", ".codex-plugin/plugin.json"):
+        assert json.loads(Path(manifest).read_text())["version"] == release, manifest
+    codex = json.loads(Path(".codex-mcp.json").read_text())["mcpServers"]["provepr"]["args"]
+    assert f"orvix-provepr=={release}" in codex  # Codex runs this PyPI release, not the plugin's own files

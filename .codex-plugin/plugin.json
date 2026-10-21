@@ -8,7 +8,7 @@
   },
   "license": "MIT",
   "skills": "./skills/",
-  "mcpServers": "./.mcp.json",
+  "mcpServers": "./.codex-mcp.json",
   "homepage": "https://github.com/orvixx-labs/orvix-provepr",
   "repository": "https://github.com/orvixx-labs/orvix-provepr"
 }

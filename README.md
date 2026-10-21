@@ -137,7 +137,7 @@ To load it for a single session from a local checkout: `claude --plugin-dir /pat
 
 ```
 codex plugin marketplace add orvixx-labs/orvix-provepr
-codex plugin add provepr
+codex plugin add provepr@orvix
 ```
 
 Or add it as a plain MCP server:

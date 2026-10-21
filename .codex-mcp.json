@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "provepr": {
+      "command": "uvx",
+      "args": ["--from", "orvix-provepr==0.3.0", "provepr", "mcp"]
+    }
+  }
+}

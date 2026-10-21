@@ -6,7 +6,7 @@
     {
       "name": "provepr",
       "source": "./",
-      "description": "Make your coding agent prove its UI change works in a real browser, and fix what fails, before it claims done."
+      "description": "Make your coding agent prove its change works (UI, API or command-line tool), and fix what fails, before it claims done."
     }
   ]
 }
