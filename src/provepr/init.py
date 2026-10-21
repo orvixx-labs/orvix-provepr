@@ -84,8 +84,11 @@ jobs:
 # Earlier versions' workflow templates: a file still matching one (apart from version pins) was never
 # edited, so `init` may replace it. Add the old template here whenever WORKFLOW changes.
 FETCH_STEP = WORKFLOW[WORKFLOW.index("      - name: Fetch") : WORKFLOW.index("      - uses: astral-sh")]
-OLD_WORKFLOWS = (  # 0.1.x
-    WORKFLOW.replace(FETCH_STEP, "").replace(
+SECRETS_HINT = WORKFLOW[WORKFLOW.index("        # If the plan reads") : WORKFLOW.index("      - name: Upload")]
+V02 = WORKFLOW.replace(SECRETS_HINT, "")
+OLD_WORKFLOWS = (
+    V02,  # 0.2.x
+    V02.replace(FETCH_STEP, "").replace(  # 0.1.x
         'Check the plan (and that no claim was removed or weakened)\n        run: uvx --from "INSTALL_SPEC" provepr check --base "origin/$GITHUB_BASE_REF"',
         'Check the plan\n        run: uvx --from "INSTALL_SPEC" provepr check',
     ),

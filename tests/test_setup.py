@@ -113,13 +113,17 @@ def test_init_is_idempotent_and_keeps_user_content(tmp_path):
 def test_init_upgrades_what_an_older_version_wrote(tmp_path):
     wf = tmp_path / ".github/workflows/provepr.yml"
     wf.parent.mkdir(parents=True)
-    v010 = OLD_WORKFLOWS[0].replace("INSTALL_SPEC", "orvix-provepr==0.1.0").replace("PLAYWRIGHT_VERSION", "1.40.0")
+    v010 = OLD_WORKFLOWS[-1].replace("INSTALL_SPEC", "orvix-provepr==0.1.0").replace("PLAYWRIGHT_VERSION", "1.40.0")
     wf.write_text(v010)
     (tmp_path / "AGENTS.md").write_text(f"{BEGIN}\nold rules\n{END}\n")
     assert len(stale(tmp_path)) == 2
     init(tmp_path)
     assert stale(tmp_path) == []
     assert "provepr check --base" in wf.read_text() and "old rules" not in (tmp_path / "AGENTS.md").read_text()
+
+    wf.write_text(OLD_WORKFLOWS[0].replace("INSTALL_SPEC", "orvix-provepr==0.2.1"))  # 0.2.x, before secrets
+    init(tmp_path)
+    assert stale(tmp_path) == [] and "secrets.LOGIN_PASSWORD" in wf.read_text()
 
     edited = v010.replace("# - run: npm ci", "- run: npm ci")
     wf.write_text(edited)
